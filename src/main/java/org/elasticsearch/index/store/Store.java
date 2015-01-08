@@ -41,6 +41,7 @@ import org.elasticsearch.common.lucene.Directories;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.lucene.store.InputStreamIndexInput;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.Callback;
 import org.elasticsearch.common.util.concurrent.AbstractRefCounted;
 import org.elasticsearch.common.util.concurrent.RefCounted;
 import org.elasticsearch.env.ShardLock;
@@ -92,6 +93,7 @@ public class Store extends AbstractIndexShardComponent implements Closeable, Ref
     private final StoreDirectory directory;
     private final ReentrantReadWriteLock metadataLock = new ReentrantReadWriteLock();
     private final ShardLock shardLock;
+    private final OnClose onClose;
 
     private final AbstractRefCounted refCounter = new AbstractRefCounted("store") {
         @Override
@@ -101,12 +103,18 @@ public class Store extends AbstractIndexShardComponent implements Closeable, Ref
         }
     };
 
-    @Inject
     public Store(ShardId shardId, @IndexSettings Settings indexSettings, DirectoryService directoryService, Distributor distributor, ShardLock shardLock) throws IOException {
+        this(shardId, indexSettings, directoryService, distributor, shardLock, OnClose.EMPTY);
+    }
+
+    @Inject
+    public Store(ShardId shardId, @IndexSettings Settings indexSettings, DirectoryService directoryService, Distributor distributor, ShardLock shardLock, OnClose onClose) throws IOException {
         super(shardId, indexSettings);
         this.directoryService = directoryService;
         this.directory = new StoreDirectory(directoryService.newFromDistributor(distributor), Loggers.getLogger("index.store.deletes", indexSettings, shardId));
         this.shardLock = shardLock;
+        this.onClose = onClose;
+        assert onClose != null;
         assert shardLock != null;
         assert shardLock.getShardId().equals(shardId);
     }
@@ -342,7 +350,11 @@ public class Store extends AbstractIndexShardComponent implements Closeable, Ref
 
     private void closeInternal() {
         try {
-            directory.innerClose(); // this closes the distributorDirectory as well
+            try {
+                directory.innerClose(); // this closes the distributorDirectory as well
+            } finally {
+                onClose.handle(shardLock);
+            }
         } catch (IOException e) {
             logger.debug("failed to close directory", e);
         } finally {
@@ -657,11 +669,6 @@ public class Store extends AbstractIndexShardComponent implements Closeable, Ref
             metadata = buildMetadata(commit, directory, logger);
         }
 
-        private static final boolean useLuceneChecksum(Version version, boolean hasLegacyChecksum) {
-            return (version.onOrAfter(FIRST_LUCENE_CHECKSUM_VERSION) && hasLegacyChecksum == false) // no legacy checksum and a guarantee that lucene has checksums
-                    || version.onOrAfter(FIRST_ES_CRC32_VERSION); // OR we know that we didn't even write legacy checksums anymore when this segment was written.
-        }
-
         ImmutableMap<String, StoreFileMetaData> buildMetadata(IndexCommit commit, Directory directory, ESLogger logger) throws IOException {
             ImmutableMap.Builder<String, StoreFileMetaData> builder = ImmutableMap.builder();
             Map<String, String> checksumMap = readLegacyChecksums(directory).v1();
@@ -670,24 +677,28 @@ public class Store extends AbstractIndexShardComponent implements Closeable, Ref
                 Version maxVersion = Version.LUCENE_4_0; // we don't know which version was used to write so we take the max version.
                 for (SegmentCommitInfo info : segmentCommitInfos) {
                     final Version version = info.info.getVersion();
-                    if (version != null && version.onOrAfter(maxVersion)) {
+                    if (version == null) {
+                        // version is written since 3.1+: we should have already hit IndexFormatTooOld.
+                        throw new IllegalArgumentException("expected valid version value: " + info.info.toString());
+                    }
+                    if (version.onOrAfter(maxVersion)) {
                         maxVersion = version;
                     }
                     for (String file : info.files()) {
                         String legacyChecksum = checksumMap.get(file);
-                        if (useLuceneChecksum(version, legacyChecksum != null)) {
+                        if (version.onOrAfter(FIRST_LUCENE_CHECKSUM_VERSION)) {
                             checksumFromLuceneFile(directory, file, builder, logger, version, SEGMENT_INFO_EXTENSION.equals(IndexFileNames.getExtension(file)));
                         } else {
-                            builder.put(file, new StoreFileMetaData(file, directory.fileLength(file), legacyChecksum, null));
+                            builder.put(file, new StoreFileMetaData(file, directory.fileLength(file), legacyChecksum, version));
                         }
                     }
                 }
                 final String segmentsFile = segmentCommitInfos.getSegmentsFileName();
                 String legacyChecksum = checksumMap.get(segmentsFile);
-                if (useLuceneChecksum(maxVersion, legacyChecksum != null)) {
+                if (maxVersion.onOrAfter(FIRST_LUCENE_CHECKSUM_VERSION)) {
                     checksumFromLuceneFile(directory, segmentsFile, builder, logger, maxVersion, true);
                 } else {
-                    builder.put(segmentsFile, new StoreFileMetaData(segmentsFile, directory.fileLength(segmentsFile), legacyChecksum, null, hashFile(directory, segmentsFile)));
+                    builder.put(segmentsFile, new StoreFileMetaData(segmentsFile, directory.fileLength(segmentsFile), legacyChecksum, maxVersion, hashFile(directory, segmentsFile)));
                 }
             } catch (CorruptIndexException | IndexFormatTooOldException | IndexFormatTooNewException ex) {
                 throw ex;
@@ -1278,5 +1289,20 @@ public class Store extends AbstractIndexShardComponent implements Closeable, Ref
             }
             directory().sync(Collections.singleton(uuid));
         }
+    }
+
+    /**
+     * A listener that is executed once the store is closed and all references to it are released
+     */
+    public static interface OnClose extends Callback<ShardLock> {
+        static final OnClose EMPTY = new OnClose() {
+            /**
+             * This method is called while the provided {@link org.elasticsearch.env.ShardLock} is held.
+             * This method is only called once after all resources for a store are released.
+             */
+            @Override
+            public void handle(ShardLock Lock) {
+            }
+        };
     }
 }
