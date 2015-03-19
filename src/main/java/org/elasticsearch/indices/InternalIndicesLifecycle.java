@@ -47,10 +47,12 @@ public class InternalIndicesLifecycle extends AbstractComponent implements Indic
         super(settings);
     }
 
+    @Override
     public void addListener(Listener listener) {
         listeners.add(listener);
     }
 
+    @Override
     public void removeListener(Listener listener) {
         listeners.remove(listener);
     }
@@ -61,6 +63,17 @@ public class InternalIndicesLifecycle extends AbstractComponent implements Indic
                 listener.shardRoutingChanged(indexShard, oldRouting, newRouting);
             } catch (Throwable t) {
                 logger.warn("{} failed to invoke shard touring changed callback", t, indexShard.shardId());
+            }
+        }
+    }
+
+    public void beforeIndexAddedToCluster(Index index, @IndexSettings Settings indexSettings) {
+        for (Listener listener : listeners) {
+            try {
+                listener.beforeIndexAddedToCluster(index, indexSettings);
+            } catch (Throwable t) {
+                logger.warn("[{}] failed to invoke before index added to cluster callback", t, index.name());
+                throw t;
             }
         }
     }
