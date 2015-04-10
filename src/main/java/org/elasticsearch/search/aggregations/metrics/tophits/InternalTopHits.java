@@ -18,9 +18,6 @@
  */
 package org.elasticsearch.search.aggregations.metrics.tophits;
 
-import java.io.IOException;
-import java.util.List;
-
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.TopDocs;
@@ -37,6 +34,9 @@ import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.metrics.InternalMetricsAggregation;
 import org.elasticsearch.search.internal.InternalSearchHit;
 import org.elasticsearch.search.internal.InternalSearchHits;
+
+import java.io.IOException;
+import java.util.List;
 
 /**
  */
@@ -85,8 +85,7 @@ public class InternalTopHits extends InternalMetricsAggregation implements TopHi
     }
 
     @Override
-    public InternalAggregation reduce(ReduceContext reduceContext) {
-        List<InternalAggregation> aggregations = reduceContext.aggregations();
+    public InternalAggregation reduce(List<InternalAggregation> aggregations, ReduceContext reduceContext) {
         InternalSearchHits[] shardHits = new InternalSearchHits[aggregations.size()];
 
         final TopDocs reducedTopDocs;
@@ -150,7 +149,7 @@ public class InternalTopHits extends InternalMetricsAggregation implements TopHi
     protected void doWriteTo(StreamOutput out) throws IOException {
         out.writeVInt(from);
         out.writeVInt(size);
-        Lucene.writeTopDocs(out, topDocs, 0);
+        Lucene.writeTopDocs(out, topDocs);
         searchHits.writeTo(out);
     }
 

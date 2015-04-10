@@ -26,6 +26,7 @@ import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.rest.FakeRestRequest;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -250,11 +251,6 @@ public class RestFilterChainTests extends ElasticsearchTestCase {
         @Override
         public String contentType() {
             return null;
-        }
-
-        @Override
-        public boolean contentThreadSafe() {
-            return false;
         }
 
         @Override

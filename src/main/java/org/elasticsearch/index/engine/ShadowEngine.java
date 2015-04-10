@@ -90,6 +90,7 @@ public class ShadowEngine extends Engine {
         } catch (IOException ex) {
             throw new EngineCreationFailureException(shardId, "failed to open index reader", ex);
         }
+        logger.trace("created new ShadowEngine");
     }
 
 
@@ -214,5 +215,10 @@ public class ShadowEngine extends Engine {
                 store.decRef();
             }
         }
+    }
+
+    @Override
+    public boolean hasUncommittedChanges() {
+        return false;
     }
 }

@@ -65,7 +65,7 @@ public class XContentHelper {
     public static XContentParser createParser(byte[] data, int offset, int length) throws IOException {
         Compressor compressor = CompressorFactory.compressor(data, offset, length);
         if (compressor != null) {
-            CompressedStreamInput compressedInput = compressor.streamInput(new BytesStreamInput(data, offset, length, false));
+            CompressedStreamInput compressedInput = compressor.streamInput(new BytesStreamInput(data, offset, length));
             XContentType contentType = XContentFactory.xContentType(compressedInput);
             compressedInput.resetToBufferStart();
             return XContentFactory.xContent(contentType).createParser(compressedInput);
@@ -111,7 +111,7 @@ public class XContentHelper {
             XContentType contentType;
             Compressor compressor = CompressorFactory.compressor(data, offset, length);
             if (compressor != null) {
-                CompressedStreamInput compressedStreamInput = compressor.streamInput(new BytesStreamInput(data, offset, length, false));
+                CompressedStreamInput compressedStreamInput = compressor.streamInput(new BytesStreamInput(data, offset, length));
                 contentType = XContentFactory.xContentType(compressedStreamInput);
                 compressedStreamInput.resetToBufferStart();
                 parser = XContentFactory.xContent(contentType).createParser(compressedStreamInput);
@@ -207,6 +207,9 @@ public class XContentHelper {
             XContentBuilder builder = XContentFactory.jsonBuilder();
             if (params.paramAsBoolean("pretty", true)) {
                 builder.prettyPrint();
+            }
+            if (params.paramAsBoolean("human", true)) {
+                builder.humanReadable(true);
             }
             builder.startObject();
             toXContent.toXContent(builder, params);
