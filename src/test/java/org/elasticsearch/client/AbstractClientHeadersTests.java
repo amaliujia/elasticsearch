@@ -23,8 +23,6 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.GenericAction;
-import org.elasticsearch.action.admin.cluster.node.shutdown.NodesShutdownAction;
-import org.elasticsearch.action.admin.cluster.node.shutdown.NodesShutdownResponse;
 import org.elasticsearch.action.admin.cluster.reroute.ClusterRerouteAction;
 import org.elasticsearch.action.admin.cluster.reroute.ClusterRerouteResponse;
 import org.elasticsearch.action.admin.cluster.snapshots.create.CreateSnapshotAction;
@@ -53,6 +51,7 @@ import org.elasticsearch.client.support.Headers;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportMessage;
 import org.junit.After;
 import org.junit.Before;
@@ -80,22 +79,29 @@ public abstract class AbstractClientHeadersTests extends ElasticsearchTestCase {
                 IndexAction.INSTANCE,
 
                 // cluster admin actions
-                ClusterStatsAction.INSTANCE, CreateSnapshotAction.INSTANCE, NodesShutdownAction.INSTANCE, ClusterRerouteAction.INSTANCE,
+                ClusterStatsAction.INSTANCE, CreateSnapshotAction.INSTANCE, ClusterRerouteAction.INSTANCE,
 
                 // indices admin actions
                 CreateIndexAction.INSTANCE, IndicesStatsAction.INSTANCE, ClearIndicesCacheAction.INSTANCE, FlushAction.INSTANCE
     };
 
+    protected ThreadPool threadPool;
     private Client client;
 
     @Before
     public void initClient() {
-        client = buildClient(HEADER_SETTINGS, ACTIONS);
+        Settings settings = ImmutableSettings.builder()
+                .put(HEADER_SETTINGS)
+                .put("path.home", createTempDir().toString())
+                .build();
+        threadPool = new ThreadPool("test-" + getTestName());
+        client = buildClient(settings, ACTIONS);
     }
 
     @After
-    public void cleanupClient() {
+    public void cleanupClient() throws Exception {
         client.close();
+        terminate(threadPool);
     }
 
     protected abstract Client buildClient(Settings headersSettings, GenericAction[] testedActions);
@@ -119,7 +125,6 @@ public abstract class AbstractClientHeadersTests extends ElasticsearchTestCase {
         // choosing arbitrary cluster admin actions to test
         client.admin().cluster().prepareClusterStats().execute().addListener(new AssertingActionListener<ClusterStatsResponse>(ClusterStatsAction.NAME));
         client.admin().cluster().prepareCreateSnapshot("repo", "bck").execute().addListener(new AssertingActionListener<CreateSnapshotResponse>(CreateSnapshotAction.NAME));
-        client.admin().cluster().prepareNodesShutdown("n1", "n2").execute().addListener(new AssertingActionListener<NodesShutdownResponse>(NodesShutdownAction.NAME));
         client.admin().cluster().prepareReroute().execute().addListener(new AssertingActionListener<ClusterRerouteResponse>(ClusterRerouteAction.NAME));
 
         // choosing arbitrary indices admin actions to test

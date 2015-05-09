@@ -134,7 +134,7 @@ by running `ulimit -l unlimited` as `root` before starting Elasticsearch.
 
 Another possible reason why `mlockall` can fail is that the temporary directory
 (usually `/tmp`) is mounted with the `noexec` option. This can be solved by
-specfying a new temp directory, by starting Elasticsearch with:
+specifying a new temp directory, by starting Elasticsearch with:
 
 [source,sh]
 --------------
@@ -206,6 +206,17 @@ when your node starts up.
 --------------------------------------------------
 node:
   name: <NAME OF YOUR NODE>
+--------------------------------------------------
+
+The hostname of the machine is provided in the environment
+variable `HOSTNAME`. If on your machine you only run a
+single elasticsearch node for that cluster, you can set
+the node name to the hostname using the `${...}` notation:
+
+[source,yaml]
+--------------------------------------------------
+node:
+  name: ${HOSTNAME}
 --------------------------------------------------
 
 Internally, all settings are collapsed into "namespaced" settings. For

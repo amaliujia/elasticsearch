@@ -21,7 +21,6 @@ package org.elasticsearch.snapshots;
 
 import com.carrotsearch.hppc.IntOpenHashSet;
 import com.carrotsearch.hppc.IntSet;
-import com.carrotsearch.randomizedtesting.LifecycleScope;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -39,7 +38,9 @@ import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ProcessedClusterStateUpdateTask;
+import org.elasticsearch.cluster.AbstractDiffable;
 import org.elasticsearch.cluster.metadata.MetaData;
+import org.elasticsearch.cluster.metadata.MetaData.Custom;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Priority;
 import org.elasticsearch.common.io.stream.StreamInput;
@@ -51,7 +52,7 @@ import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.discovery.zen.elect.ElectMasterService;
-import org.elasticsearch.index.store.support.AbstractIndexStore;
+import org.elasticsearch.index.store.IndexStore;
 import org.elasticsearch.indices.ttl.IndicesTTLService;
 import org.elasticsearch.repositories.RepositoryMissingException;
 import org.elasticsearch.snapshots.mockstore.MockRepositoryModule;
@@ -112,7 +113,7 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
 
         logger.info("--> create repository");
         PutRepositoryResponse putRepositoryResponse = client.admin().cluster().preparePutRepository("test-repo")
-                .setType("fs").setSettings(ImmutableSettings.settingsBuilder().put("location", newTempDir())).execute().actionGet();
+                .setType("fs").setSettings(ImmutableSettings.settingsBuilder().put("location", createTempDir())).execute().actionGet();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
 
         logger.info("--> start snapshot");
@@ -145,7 +146,7 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
 
     @Test
     public void restoreCustomMetadata() throws Exception {
-        Path tempDir = newTempDirPath();
+        Path tempDir = createTempDir();
 
         logger.info("--> start node");
         internalCluster().startNode();
@@ -292,7 +293,7 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
         PutRepositoryResponse putRepositoryResponse = client.admin().cluster().preparePutRepository("test-repo")
                 .setType(MockRepositoryModule.class.getCanonicalName()).setSettings(
                         ImmutableSettings.settingsBuilder()
-                                .put("location", newTempDir(LifecycleScope.TEST))
+                                .put("location", createTempDir())
                                 .put("random", randomAsciiOfLength(10))
                                 .put("wait_after_unblock", 200)
                 ).get();
@@ -337,7 +338,7 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
         assertThat(client.prepareCount("test-idx").get().getCount(), equalTo(100L));
 
         logger.info("--> creating repository");
-        Path repo = newTempDirPath(LifecycleScope.TEST);
+        Path repo = createTempDir();
         PutRepositoryResponse putRepositoryResponse = client.admin().cluster().preparePutRepository("test-repo")
                 .setType(MockRepositoryModule.class.getCanonicalName()).setSettings(
                         ImmutableSettings.settingsBuilder()
@@ -411,12 +412,18 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
                 .put("number_of_replicas", 0)));
         ensureGreen("test-idx-all");
 
+        logger.info("--> create an index that will be closed");
+        assertAcked(prepareCreate("test-idx-closed", 1, settingsBuilder().put("number_of_shards", 4).put("number_of_replicas", 0)));
+        ensureGreen("test-idx-closed");
+
         logger.info("--> indexing some data into test-idx-all");
         for (int i = 0; i < 100; i++) {
             index("test-idx-all", "doc", Integer.toString(i), "foo", "bar" + i);
+            index("test-idx-closed", "doc", Integer.toString(i), "foo", "bar" + i);
         }
         refresh();
         assertThat(client().prepareCount("test-idx-all").get().getCount(), equalTo(100L));
+        assertAcked(client().admin().indices().prepareClose("test-idx-closed"));
 
         logger.info("--> create an index that will have no allocated shards");
         assertAcked(prepareCreate("test-idx-none", 1, settingsBuilder().put("number_of_shards", 6)
@@ -426,17 +433,23 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
         logger.info("--> create repository");
         logger.info("--> creating repository");
         PutRepositoryResponse putRepositoryResponse = client().admin().cluster().preparePutRepository("test-repo")
-                .setType("fs").setSettings(ImmutableSettings.settingsBuilder().put("location", newTempDir())).execute().actionGet();
+                .setType("fs").setSettings(ImmutableSettings.settingsBuilder().put("location", createTempDir())).execute().actionGet();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
 
         logger.info("--> start snapshot with default settings - should fail");
-        CreateSnapshotResponse createSnapshotResponse = client().admin().cluster().prepareCreateSnapshot("test-repo", "test-snap-1").setWaitForCompletion(true).execute().actionGet();
-
+        CreateSnapshotResponse createSnapshotResponse = client().admin().cluster().prepareCreateSnapshot("test-repo", "test-snap-1")
+                .setIndices("test-idx-all", "test-idx-none", "test-idx-some", "test-idx-closed")
+                .setWaitForCompletion(true).execute().actionGet();
         assertThat(createSnapshotResponse.getSnapshotInfo().state(), equalTo(SnapshotState.FAILED));
+        assertThat(createSnapshotResponse.getSnapshotInfo().reason(), containsString("Indices don't have primary shards"));
+        assertThat(createSnapshotResponse.getSnapshotInfo().reason(), containsString("; Indices are closed [test-idx-closed]"));
+
 
         if (randomBoolean()) {
             logger.info("checking snapshot completion using status");
-            client().admin().cluster().prepareCreateSnapshot("test-repo", "test-snap-2").setWaitForCompletion(false).setPartial(true).execute().actionGet();
+            client().admin().cluster().prepareCreateSnapshot("test-repo", "test-snap-2")
+                    .setIndices("test-idx-all", "test-idx-none", "test-idx-some", "test-idx-closed")
+                    .setWaitForCompletion(false).setPartial(true).execute().actionGet();
             awaitBusy(new Predicate<Object>() {
                 @Override
                 public boolean apply(Object o) {
@@ -454,7 +467,7 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
             assertThat(snapshotStatuses.size(), equalTo(1));
             SnapshotStatus snapshotStatus = snapshotStatuses.get(0);
             logger.info("State: [{}], Reason: [{}]", createSnapshotResponse.getSnapshotInfo().state(), createSnapshotResponse.getSnapshotInfo().reason());
-            assertThat(snapshotStatus.getShardsStats().getTotalShards(), equalTo(18));
+            assertThat(snapshotStatus.getShardsStats().getTotalShards(), equalTo(22));
             assertThat(snapshotStatus.getShardsStats().getDoneShards(), lessThan(12));
             assertThat(snapshotStatus.getShardsStats().getDoneShards(), greaterThan(6));
 
@@ -475,9 +488,11 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
             });
         } else {
             logger.info("checking snapshot completion using wait_for_completion flag");
-            createSnapshotResponse = client().admin().cluster().prepareCreateSnapshot("test-repo", "test-snap-2").setWaitForCompletion(true).setPartial(true).execute().actionGet();
+            createSnapshotResponse = client().admin().cluster().prepareCreateSnapshot("test-repo", "test-snap-2")
+                    .setIndices("test-idx-all", "test-idx-none", "test-idx-some", "test-idx-closed")
+                    .setWaitForCompletion(true).setPartial(true).execute().actionGet();
             logger.info("State: [{}], Reason: [{}]", createSnapshotResponse.getSnapshotInfo().state(), createSnapshotResponse.getSnapshotInfo().reason());
-            assertThat(createSnapshotResponse.getSnapshotInfo().totalShards(), equalTo(18));
+            assertThat(createSnapshotResponse.getSnapshotInfo().totalShards(), equalTo(22));
             assertThat(createSnapshotResponse.getSnapshotInfo().successfulShards(), lessThan(12));
             assertThat(createSnapshotResponse.getSnapshotInfo().successfulShards(), greaterThan(6));
             assertThat(client().admin().cluster().prepareGetSnapshots("test-repo").setSnapshots("test-snap-2").execute().actionGet().getSnapshots().get(0).state(), equalTo(SnapshotState.PARTIAL));
@@ -529,7 +544,7 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
 
         logger.info("--> create repository");
         PutRepositoryResponse putRepositoryResponse = client().admin().cluster().preparePutRepository("test-repo")
-                .setType("fs").setSettings(ImmutableSettings.settingsBuilder().put("location", newTempDir())).execute().actionGet();
+                .setType("fs").setSettings(ImmutableSettings.settingsBuilder().put("location", createTempDir())).execute().actionGet();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
         int numberOfShards = 6;
         logger.info("--> create an index that will have some unallocated shards");
@@ -588,12 +603,12 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
         for (int i = 0; i < 5; i++) {
             client().admin().cluster().preparePutRepository("test-repo" + i)
                     .setType("mock").setSettings(ImmutableSettings.settingsBuilder()
-                    .put("location", newTempDir(LifecycleScope.SUITE))).setVerify(false).get();
+                    .put("location", createTempDir())).setVerify(false).get();
         }
         logger.info("--> make sure that properly setup repository can be registered on all nodes");
         client().admin().cluster().preparePutRepository("test-repo-0")
                 .setType("fs").setSettings(ImmutableSettings.settingsBuilder()
-                .put("location", newTempDir(LifecycleScope.SUITE))).get();
+                .put("location", createTempDir())).get();
 
     }
 
@@ -611,7 +626,7 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
         logger.info("-->  creating repository");
         assertAcked(client().admin().cluster().preparePutRepository("test-repo")
                 .setType("fs").setSettings(ImmutableSettings.settingsBuilder()
-                        .put("location", newTempDir(LifecycleScope.SUITE))
+                        .put("location", createTempDir())
                         .put("compress", randomBoolean())
                         .put("chunk_size", randomIntBetween(100, 1000))));
 
@@ -684,7 +699,7 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
 
         logger.info("--> update index settings to back to normal");
         assertAcked(client().admin().indices().prepareUpdateSettings("test-*").setSettings(ImmutableSettings.builder()
-                        .put(AbstractIndexStore.INDEX_STORE_THROTTLE_TYPE, "node")
+                        .put(IndexStore.INDEX_STORE_THROTTLE_TYPE, "node")
         ));
 
         // Make sure that snapshot finished - doesn't matter if it failed or succeeded
@@ -730,12 +745,12 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
         }
 
         assertAcked(client().admin().indices().prepareUpdateSettings(name).setSettings(ImmutableSettings.builder()
-                        .put(AbstractIndexStore.INDEX_STORE_THROTTLE_TYPE, "all")
-                        .put(AbstractIndexStore.INDEX_STORE_THROTTLE_MAX_BYTES_PER_SEC, between(100, 50000))
+                        .put(IndexStore.INDEX_STORE_THROTTLE_TYPE, "all")
+                        .put(IndexStore.INDEX_STORE_THROTTLE_MAX_BYTES_PER_SEC, between(100, 50000))
         ));
     }
 
-    public static abstract class TestCustomMetaData implements MetaData.Custom {
+    public static abstract class TestCustomMetaData extends AbstractDiffable<Custom> implements MetaData.Custom {
         private final String data;
 
         protected TestCustomMetaData(String data) {
@@ -763,194 +778,182 @@ public class DedicatedClusterSnapshotRestoreTests extends AbstractSnapshotTests 
             return data.hashCode();
         }
 
-        public static abstract class TestCustomMetaDataFactory<T extends TestCustomMetaData> extends MetaData.Custom.Factory<T> {
+        protected abstract TestCustomMetaData newTestCustomMetaData(String data);
 
-            protected abstract TestCustomMetaData newTestCustomMetaData(String data);
+        @Override
+        public Custom readFrom(StreamInput in) throws IOException {
+            return newTestCustomMetaData(in.readString());
+        }
 
-            @Override
-            public T readFrom(StreamInput in) throws IOException {
-                return (T) newTestCustomMetaData(in.readString());
-            }
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeString(getData());
+        }
 
-            @Override
-            public void writeTo(T metadata, StreamOutput out) throws IOException {
-                out.writeString(metadata.getData());
-            }
-
-            @Override
-            public T fromXContent(XContentParser parser) throws IOException {
-                XContentParser.Token token;
-                String data = null;
-                while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
-                    if (token == XContentParser.Token.FIELD_NAME) {
-                        String currentFieldName = parser.currentName();
-                        if ("data".equals(currentFieldName)) {
-                            if (parser.nextToken() != XContentParser.Token.VALUE_STRING) {
-                                throw new ElasticsearchParseException("failed to parse snapshottable metadata, invalid data type");
-                            }
-                            data = parser.text();
-                        } else {
-                            throw new ElasticsearchParseException("failed to parse snapshottable metadata, unknown field [" + currentFieldName + "]");
+        @Override
+        public Custom fromXContent(XContentParser parser) throws IOException {
+            XContentParser.Token token;
+            String data = null;
+            while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
+                if (token == XContentParser.Token.FIELD_NAME) {
+                    String currentFieldName = parser.currentName();
+                    if ("data".equals(currentFieldName)) {
+                        if (parser.nextToken() != XContentParser.Token.VALUE_STRING) {
+                            throw new ElasticsearchParseException("failed to parse snapshottable metadata, invalid data type");
                         }
+                        data = parser.text();
                     } else {
-                        throw new ElasticsearchParseException("failed to parse snapshottable metadata");
+                        throw new ElasticsearchParseException("failed to parse snapshottable metadata, unknown field [" + currentFieldName + "]");
                     }
+                } else {
+                    throw new ElasticsearchParseException("failed to parse snapshottable metadata");
                 }
-                if (data == null) {
-                    throw new ElasticsearchParseException("failed to parse snapshottable metadata, data not found");
-                }
-                return (T) newTestCustomMetaData(data);
             }
+            if (data == null) {
+                throw new ElasticsearchParseException("failed to parse snapshottable metadata, data not found");
+            }
+            return newTestCustomMetaData(data);
+        }
 
-            @Override
-            public void toXContent(T metadata, XContentBuilder builder, ToXContent.Params params) throws IOException {
-                builder.field("data", metadata.getData());
-            }
+        @Override
+        public XContentBuilder toXContent(XContentBuilder builder, ToXContent.Params params) throws IOException {
+            builder.field("data", getData());
+            return builder;
         }
     }
 
+
     static {
-        MetaData.registerFactory(SnapshottableMetadata.TYPE, SnapshottableMetadata.FACTORY);
-        MetaData.registerFactory(NonSnapshottableMetadata.TYPE, NonSnapshottableMetadata.FACTORY);
-        MetaData.registerFactory(SnapshottableGatewayMetadata.TYPE, SnapshottableGatewayMetadata.FACTORY);
-        MetaData.registerFactory(NonSnapshottableGatewayMetadata.TYPE, NonSnapshottableGatewayMetadata.FACTORY);
-        MetaData.registerFactory(SnapshotableGatewayNoApiMetadata.TYPE, SnapshotableGatewayNoApiMetadata.FACTORY);
+        MetaData.registerPrototype(SnapshottableMetadata.TYPE, SnapshottableMetadata.PROTO);
+        MetaData.registerPrototype(NonSnapshottableMetadata.TYPE, NonSnapshottableMetadata.PROTO);
+        MetaData.registerPrototype(SnapshottableGatewayMetadata.TYPE, SnapshottableGatewayMetadata.PROTO);
+        MetaData.registerPrototype(NonSnapshottableGatewayMetadata.TYPE, NonSnapshottableGatewayMetadata.PROTO);
+        MetaData.registerPrototype(SnapshotableGatewayNoApiMetadata.TYPE, SnapshotableGatewayNoApiMetadata.PROTO);
     }
 
     public static class SnapshottableMetadata extends TestCustomMetaData {
         public static final String TYPE = "test_snapshottable";
 
-        public static final Factory FACTORY = new Factory();
+        public static final SnapshottableMetadata PROTO = new SnapshottableMetadata("");
 
         public SnapshottableMetadata(String data) {
             super(data);
         }
 
-        private static class Factory extends TestCustomMetaDataFactory<SnapshottableMetadata> {
+        @Override
+        public String type() {
+            return TYPE;
+        }
 
-            @Override
-            public String type() {
-                return TYPE;
-            }
+        @Override
+        protected TestCustomMetaData newTestCustomMetaData(String data) {
+            return new SnapshottableMetadata(data);
+        }
 
-            @Override
-            protected TestCustomMetaData newTestCustomMetaData(String data) {
-                return new SnapshottableMetadata(data);
-            }
-
-            @Override
-            public EnumSet<MetaData.XContentContext> context() {
-                return MetaData.API_AND_SNAPSHOT;
-            }
+        @Override
+        public EnumSet<MetaData.XContentContext> context() {
+            return MetaData.API_AND_SNAPSHOT;
         }
     }
 
     public static class NonSnapshottableMetadata extends TestCustomMetaData {
         public static final String TYPE = "test_non_snapshottable";
 
-        public static final Factory FACTORY = new Factory();
+        public static final NonSnapshottableMetadata PROTO = new NonSnapshottableMetadata("");
 
         public NonSnapshottableMetadata(String data) {
             super(data);
         }
 
-        private static class Factory extends TestCustomMetaDataFactory<NonSnapshottableMetadata> {
+        @Override
+        public String type() {
+            return TYPE;
+        }
 
-            @Override
-            public String type() {
-                return TYPE;
-            }
+        @Override
+        protected NonSnapshottableMetadata newTestCustomMetaData(String data) {
+            return new NonSnapshottableMetadata(data);
+        }
 
-            @Override
-            protected NonSnapshottableMetadata newTestCustomMetaData(String data) {
-                return new NonSnapshottableMetadata(data);
-            }
+        @Override
+        public EnumSet<MetaData.XContentContext> context() {
+            return MetaData.API_ONLY;
         }
     }
 
     public static class SnapshottableGatewayMetadata extends TestCustomMetaData {
         public static final String TYPE = "test_snapshottable_gateway";
 
-        public static final Factory FACTORY = new Factory();
+        public static final SnapshottableGatewayMetadata PROTO = new SnapshottableGatewayMetadata("");
 
         public SnapshottableGatewayMetadata(String data) {
             super(data);
         }
 
-        private static class Factory extends TestCustomMetaDataFactory<SnapshottableGatewayMetadata> {
+        @Override
+        public String type() {
+            return TYPE;
+        }
 
-            @Override
-            public String type() {
-                return TYPE;
-            }
+        @Override
+        protected TestCustomMetaData newTestCustomMetaData(String data) {
+            return new SnapshottableGatewayMetadata(data);
+        }
 
-            @Override
-            protected TestCustomMetaData newTestCustomMetaData(String data) {
-                return new SnapshottableGatewayMetadata(data);
-            }
-
-            @Override
-            public EnumSet<MetaData.XContentContext> context() {
-                return EnumSet.of(MetaData.XContentContext.API, MetaData.XContentContext.SNAPSHOT, MetaData.XContentContext.GATEWAY);
-            }
+        @Override
+        public EnumSet<MetaData.XContentContext> context() {
+            return EnumSet.of(MetaData.XContentContext.API, MetaData.XContentContext.SNAPSHOT, MetaData.XContentContext.GATEWAY);
         }
     }
 
     public static class NonSnapshottableGatewayMetadata extends TestCustomMetaData {
         public static final String TYPE = "test_non_snapshottable_gateway";
 
-        public static final Factory FACTORY = new Factory();
+        public static final NonSnapshottableGatewayMetadata PROTO = new NonSnapshottableGatewayMetadata("");
 
         public NonSnapshottableGatewayMetadata(String data) {
             super(data);
         }
 
-        private static class Factory extends TestCustomMetaDataFactory<NonSnapshottableGatewayMetadata> {
-
-            @Override
-            public String type() {
-                return TYPE;
-            }
-
-            @Override
-            protected NonSnapshottableGatewayMetadata newTestCustomMetaData(String data) {
-                return new NonSnapshottableGatewayMetadata(data);
-            }
-
-            @Override
-            public EnumSet<MetaData.XContentContext> context() {
-                return MetaData.API_AND_GATEWAY;
-            }
-
+        @Override
+        public String type() {
+            return TYPE;
         }
+
+        @Override
+        protected NonSnapshottableGatewayMetadata newTestCustomMetaData(String data) {
+            return new NonSnapshottableGatewayMetadata(data);
+        }
+
+        @Override
+        public EnumSet<MetaData.XContentContext> context() {
+            return MetaData.API_AND_GATEWAY;
+        }
+
     }
 
     public static class SnapshotableGatewayNoApiMetadata extends TestCustomMetaData {
         public static final String TYPE = "test_snapshottable_gateway_no_api";
 
-        public static final Factory FACTORY = new Factory();
+        public static final SnapshotableGatewayNoApiMetadata PROTO = new SnapshotableGatewayNoApiMetadata("");
 
         public SnapshotableGatewayNoApiMetadata(String data) {
             super(data);
         }
 
-        private static class Factory extends TestCustomMetaDataFactory<SnapshotableGatewayNoApiMetadata> {
+        @Override
+        public String type() {
+            return TYPE;
+        }
 
-            @Override
-            public String type() {
-                return TYPE;
-            }
+        @Override
+        protected SnapshotableGatewayNoApiMetadata newTestCustomMetaData(String data) {
+            return new SnapshotableGatewayNoApiMetadata(data);
+        }
 
-            @Override
-            protected SnapshotableGatewayNoApiMetadata newTestCustomMetaData(String data) {
-                return new SnapshotableGatewayNoApiMetadata(data);
-            }
-
-            @Override
-            public EnumSet<MetaData.XContentContext> context() {
-                return EnumSet.of(MetaData.XContentContext.GATEWAY, MetaData.XContentContext.SNAPSHOT);
-            }
-
+        @Override
+        public EnumSet<MetaData.XContentContext> context() {
+            return EnumSet.of(MetaData.XContentContext.GATEWAY, MetaData.XContentContext.SNAPSHOT);
         }
     }
 

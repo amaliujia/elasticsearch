@@ -27,13 +27,14 @@ import org.elasticsearch.index.fielddata.MultiGeoPointValues;
 import org.elasticsearch.index.fielddata.SortedBinaryDocValues;
 import org.elasticsearch.index.fielddata.SortedNumericDoubleValues;
 import org.elasticsearch.index.fielddata.SortingNumericDocValues;
-import org.elasticsearch.index.query.GeoBoundingBoxFilterBuilder;
+import org.elasticsearch.index.query.GeoBoundingBoxQueryBuilder;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.AggregatorBase;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.NonCollectingAggregator;
 import org.elasticsearch.search.aggregations.bucket.BucketUtils;
+import org.elasticsearch.search.aggregations.reducers.Reducer;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.ValuesSource;
 import org.elasticsearch.search.aggregations.support.ValuesSourceAggregatorFactory;
@@ -43,11 +44,12 @@ import org.elasticsearch.search.internal.SearchContext;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Aggregates Geo information into cells determined by geohashes of a given precision.
- * WARNING - for high-precision geohashes it may prove necessary to use a {@link GeoBoundingBoxFilterBuilder}
+ * WARNING - for high-precision geohashes it may prove necessary to use a {@link GeoBoundingBoxQueryBuilder}
  * aggregation to focus in on a smaller area to avoid generating too many buckets and using too much RAM
  */
 public class GeoHashGridParser implements Aggregator.Parser {
@@ -123,10 +125,11 @@ public class GeoHashGridParser implements Aggregator.Parser {
         }
 
         @Override
-        protected Aggregator createUnmapped(AggregationContext aggregationContext, Aggregator parent, Map<String, Object> metaData) throws IOException {
-            final InternalAggregation aggregation = new InternalGeoHashGrid(name, requiredSize, Collections.<InternalGeoHashGrid.Bucket>emptyList(), metaData);
-            return new NonCollectingAggregator(name, aggregationContext, parent, metaData) {
-                @Override
+        protected Aggregator createUnmapped(AggregationContext aggregationContext, Aggregator parent, List<Reducer> reducers,
+                Map<String, Object> metaData) throws IOException {
+            final InternalAggregation aggregation = new InternalGeoHashGrid(name, requiredSize,
+                    Collections.<InternalGeoHashGrid.Bucket> emptyList(), reducers, metaData);
+            return new NonCollectingAggregator(name, aggregationContext, parent, reducers, metaData) {
                 public InternalAggregation buildEmptyAggregation() {
                     return aggregation;
                 }
@@ -134,12 +137,15 @@ public class GeoHashGridParser implements Aggregator.Parser {
         }
 
         @Override
-        protected Aggregator doCreateInternal(final ValuesSource.GeoPoint valuesSource, AggregationContext aggregationContext, Aggregator parent, boolean collectsFromSingleBucket, Map<String, Object> metaData) throws IOException {
+        protected Aggregator doCreateInternal(final ValuesSource.GeoPoint valuesSource, AggregationContext aggregationContext,
+                Aggregator parent, boolean collectsFromSingleBucket, List<Reducer> reducers, Map<String, Object> metaData)
+                throws IOException {
             if (collectsFromSingleBucket == false) {
                 return asMultiBucketAggregator(this, aggregationContext, parent);
             }
             ValuesSource.Numeric cellIdSource = new CellIdSource(valuesSource, precision);
-            return new GeoHashGridAggregator(name, factories, cellIdSource, requiredSize, shardSize, aggregationContext, parent, metaData);
+            return new GeoHashGridAggregator(name, factories, cellIdSource, requiredSize, shardSize, aggregationContext, parent, reducers,
+                    metaData);
 
         }
 

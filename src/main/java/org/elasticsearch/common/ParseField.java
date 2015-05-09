@@ -18,7 +18,6 @@
  */
 package org.elasticsearch.common;
 
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -95,7 +94,7 @@ public class ParseField {
                     if (allReplacedWith != null) {
                         msg = "Deprecated field [" + currentFieldName + "] used, replaced by [" + allReplacedWith + "]";
                     }
-                    throw new ElasticsearchIllegalArgumentException(msg);
+                    throw new IllegalArgumentException(msg);
                 }
                 return true;
             }
@@ -103,4 +102,8 @@ public class ParseField {
         return false;
     }
 
+    @Override
+    public String toString() {
+        return getPreferredName();
+    }
 }

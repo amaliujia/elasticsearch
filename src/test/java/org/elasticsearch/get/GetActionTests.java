@@ -20,12 +20,13 @@
 package org.elasticsearch.get;
 
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
+import org.elasticsearch.Version;
 import org.elasticsearch.action.ShardOperationFailedException;
 import org.elasticsearch.action.admin.indices.alias.Alias;
 import org.elasticsearch.action.admin.indices.flush.FlushResponse;
 import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.get.*;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.Base64;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
@@ -227,8 +228,9 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void realtimeGetWithCompress() throws Exception {
-        assertAcked(prepareCreate("test").setSettings(ImmutableSettings.settingsBuilder().put("index.refresh_interval", -1))
+    public void realtimeGetWithCompressBackcompat() throws Exception {
+        assertAcked(prepareCreate("test")
+                .setSettings(ImmutableSettings.settingsBuilder().put("index.refresh_interval", -1).put(IndexMetaData.SETTING_VERSION_CREATED, Version.V_1_4_2.id))
                 .addMapping("type", jsonBuilder().startObject().startObject("type").startObject("_source").field("compress", true).endObject().endObject().endObject()));
         ensureGreen();
 
@@ -248,9 +250,8 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
     @Test
     public void getFieldsWithDifferentTypes() throws Exception {
         assertAcked(prepareCreate("test").setSettings(ImmutableSettings.settingsBuilder().put("index.refresh_interval", -1))
-                .addMapping("type1", jsonBuilder().startObject().startObject("type1").startObject("_source").field("enabled", true).endObject().endObject().endObject())
+                .addMapping("type1", jsonBuilder().startObject().startObject("type1").endObject().endObject())
                 .addMapping("type2", jsonBuilder().startObject().startObject("type2")
-                        .startObject("_source").field("enabled", false).endObject()
                         .startObject("properties")
                         .startObject("str").field("type", "string").field("store", "yes").endObject()
                         .startObject("strs").field("type", "string").field("store", "yes").endObject()
@@ -338,7 +339,6 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
                 .startObject("properties")
                 .startObject("field").field("type", "string").field("store", "yes").endObject()
                 .endObject()
-                .startObject("_source").field("enabled", false).endObject()
                 .endObject().endObject().string();
         assertAcked(prepareCreate("test")
                 .addMapping("type1", mapping1)
@@ -396,7 +396,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testThatGetFromTranslogShouldWorkWithExclude() throws Exception {
+    public void testThatGetFromTranslogShouldWorkWithExcludeBackcompat() throws Exception {
         String index = "test";
         String type = "type1";
 
@@ -412,7 +412,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
 
         assertAcked(prepareCreate(index)
                 .addMapping(type, mapping)
-                .setSettings(ImmutableSettings.settingsBuilder().put("index.refresh_interval", -1)));
+                .setSettings("index.refresh_interval", -1, IndexMetaData.SETTING_VERSION_CREATED, Version.V_1_4_2.id));
 
         client().prepareIndex(index, type, "1")
                 .setSource(jsonBuilder().startObject().field("field", "1", "2").field("excluded", "should not be seen").endObject())
@@ -430,7 +430,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testThatGetFromTranslogShouldWorkWithInclude() throws Exception {
+    public void testThatGetFromTranslogShouldWorkWithIncludeBackcompat() throws Exception {
         String index = "test";
         String type = "type1";
 
@@ -446,7 +446,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
 
         assertAcked(prepareCreate(index)
                 .addMapping(type, mapping)
-                .setSettings(ImmutableSettings.settingsBuilder().put("index.refresh_interval", -1)));
+                .setSettings("index.refresh_interval", -1, IndexMetaData.SETTING_VERSION_CREATED, Version.V_1_4_2.id));
 
         client().prepareIndex(index, type, "1")
                 .setSource(jsonBuilder().startObject().field("field", "1", "2").field("included", "should be seen").endObject())
@@ -465,7 +465,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    public void testThatGetFromTranslogShouldWorkWithIncludeExcludeAndFields() throws Exception {
+    public void testThatGetFromTranslogShouldWorkWithIncludeExcludeAndFieldsBackcompat() throws Exception {
         String index = "test";
         String type = "type1";
 
@@ -482,7 +482,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
 
         assertAcked(prepareCreate(index)
                 .addMapping(type, mapping)
-                .setSettings(ImmutableSettings.settingsBuilder().put("index.refresh_interval", -1)));
+                .setSettings("index.refresh_interval", -1, IndexMetaData.SETTING_VERSION_CREATED, Version.V_1_4_2.id));
 
         client().prepareIndex(index, type, "1")
                 .setSource(jsonBuilder().startObject()
@@ -783,7 +783,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
         try {
             client().prepareGet(indexOrAlias(), "my-type1", "1").setFields("field1").get();
             fail();
-        } catch (ElasticsearchIllegalArgumentException e) {
+        } catch (IllegalArgumentException e) {
             //all well
         }
 
@@ -792,7 +792,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
         try {
             client().prepareGet(indexOrAlias(), "my-type1", "1").setFields("field1").get();
             fail();
-        } catch (ElasticsearchIllegalArgumentException e) {
+        } catch (IllegalArgumentException e) {
             //all well
         }
     }
@@ -924,9 +924,6 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
                 "  },\n" +
                 "  \"mappings\": {\n" +
                 "    \"doc\": {\n" +
-                "      \"_source\": {\n" +
-                "        \"enabled\": \"" + randomBoolean() + "\"\n" +
-                "      },\n" +
                 "      \"properties\": {\n" +
                 "        \"suggest\": {\n" +
                 "          \"type\": \"completion\"\n" +
@@ -969,9 +966,6 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
                 "  \"mappings\": {\n" +
                 "    \"parentdoc\": {},\n" +
                 "    \"doc\": {\n" +
-                "      \"_source\": {\n" +
-                "        \"enabled\": " + randomBoolean() + "\n" +
-                "      },\n" +
                 "      \"_parent\": {\n" +
                 "        \"type\": \"parentdoc\"\n" +
                 "      },\n" +
@@ -1001,7 +995,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testUngeneratedFieldsPartOfSourceUnstoredSourceDisabled() throws IOException {
+    public void testUngeneratedFieldsPartOfSourceUnstoredSourceDisabledBackcompat() throws IOException {
         indexSingleDocumentWithUngeneratedFieldsThatArePartOf_source(false, false);
         String[] fieldsList = {};
         // before refresh - document is only in translog
@@ -1015,7 +1009,7 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testUngeneratedFieldsPartOfSourceEitherStoredOrSourceEnabled() throws IOException {
+    public void testUngeneratedFieldsPartOfSourceEitherStoredOrSourceEnabledBackcompat() throws IOException {
         boolean stored = randomBoolean();
         boolean sourceEnabled = true;
         if (stored) {
@@ -1038,7 +1032,8 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
         String createIndexSource = "{\n" +
                 "  \"settings\": {\n" +
                 "    \"index.translog.disable_flush\": true,\n" +
-                "    \"refresh_interval\": \"-1\"\n" +
+                "    \"refresh_interval\": \"-1\",\n" +
+                "    \"" + IndexMetaData.SETTING_VERSION_CREATED + "\": " + Version.V_1_4_2.id + "\n" +
                 "  },\n" +
                 "  \"mappings\": {\n" +
                 "    \"doc\": {\n" +
@@ -1160,7 +1155,8 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
         String createIndexSource = "{\n" +
                 "  \"settings\": {\n" +
                 "    \"index.translog.disable_flush\": true,\n" +
-                "    \"refresh_interval\": \"-1\"\n" +
+                "    \"refresh_interval\": \"-1\",\n" +
+                "    \"" + IndexMetaData.SETTING_VERSION_CREATED + "\": " + Version.V_1_4_2.id + "\n" +
                 "  },\n" +
                 "  \"mappings\": {\n" +
                 "    \"doc\": {\n" +
@@ -1214,7 +1210,8 @@ public class GetActionTests extends ElasticsearchIntegrationTest {
         String createIndexSource = "{\n" +
                 "  \"settings\": {\n" +
                 "    \"index.translog.disable_flush\": true,\n" +
-                "    \"refresh_interval\": \"-1\"\n" +
+                "    \"refresh_interval\": \"-1\",\n" +
+                "    \"" + IndexMetaData.SETTING_VERSION_CREATED + "\": " + Version.V_1_4_2.id + "\n" +
                 "  },\n" +
                 "  \"mappings\": {\n" +
                 "    \"doc\": {\n" +

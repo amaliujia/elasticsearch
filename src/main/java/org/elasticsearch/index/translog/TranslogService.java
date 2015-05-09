@@ -21,6 +21,7 @@ package org.elasticsearch.index.translog;
 
 import org.elasticsearch.action.admin.indices.flush.FlushRequest;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
@@ -29,14 +30,12 @@ import org.elasticsearch.common.util.concurrent.FutureUtils;
 import org.elasticsearch.index.engine.FlushNotAllowedEngineException;
 import org.elasticsearch.index.settings.IndexSettings;
 import org.elasticsearch.index.settings.IndexSettingsService;
-import org.elasticsearch.index.shard.AbstractIndexShardComponent;
-import org.elasticsearch.index.shard.IllegalIndexShardStateException;
-import org.elasticsearch.index.shard.IndexShardState;
-import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.index.shard.IndexShard;
+import org.elasticsearch.index.shard.*;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.io.Closeable;
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -57,7 +56,6 @@ public class TranslogService extends AbstractIndexShardComponent implements Clos
     private final ThreadPool threadPool;
     private final IndexSettingsService indexSettingsService;
     private final IndexShard indexShard;
-    private final Translog translog;
 
     private volatile TimeValue interval;
     private volatile int flushThresholdOperations;
@@ -69,25 +67,22 @@ public class TranslogService extends AbstractIndexShardComponent implements Clos
     private final ApplySettings applySettings = new ApplySettings();
 
     @Inject
-    public TranslogService(ShardId shardId, @IndexSettings Settings indexSettings, IndexSettingsService indexSettingsService, ThreadPool threadPool, IndexShard indexShard, Translog translog) {
+    public TranslogService(ShardId shardId, @IndexSettings Settings indexSettings, IndexSettingsService indexSettingsService, ThreadPool threadPool, IndexShard indexShard) {
         super(shardId, indexSettings);
         this.threadPool = threadPool;
         this.indexSettingsService = indexSettingsService;
         this.indexShard = indexShard;
-        this.translog = translog;
         this.flushThresholdOperations = indexSettings.getAsInt(INDEX_TRANSLOG_FLUSH_THRESHOLD_OPS, indexSettings.getAsInt("index.translog.flush_threshold", Integer.MAX_VALUE));
         this.flushThresholdSize = indexSettings.getAsBytesSize(INDEX_TRANSLOG_FLUSH_THRESHOLD_SIZE, new ByteSizeValue(512, ByteSizeUnit.MB));
         this.flushThresholdPeriod = indexSettings.getAsTime(INDEX_TRANSLOG_FLUSH_THRESHOLD_PERIOD, TimeValue.timeValueMinutes(30));
         this.interval = indexSettings.getAsTime(INDEX_TRANSLOG_FLUSH_INTERVAL, timeValueMillis(5000));
         this.disableFlush = indexSettings.getAsBoolean(INDEX_TRANSLOG_DISABLE_FLUSH, false);
-
         logger.debug("interval [{}], flush_threshold_ops [{}], flush_threshold_size [{}], flush_threshold_period [{}]", interval, flushThresholdOperations, flushThresholdSize, flushThresholdPeriod);
 
         this.future = threadPool.schedule(interval, ThreadPool.Names.SAME, new TranslogBasedFlush());
 
         indexSettingsService.addListener(applySettings);
     }
-
 
     @Override
     public void close() {
@@ -147,13 +142,12 @@ public class TranslogService extends AbstractIndexShardComponent implements Clos
                 reschedule();
                 return;
             }
-
-            if (indexShard.state() == IndexShardState.CREATED) {
+            Translog translog = indexShard.engine().getTranslog();
+            if (translog == null) {
                 reschedule();
                 return;
             }
-
-            int currentNumberOfOperations = translog.estimatedNumberOfOperations();
+            int currentNumberOfOperations = translog.totalOperations();
             if (currentNumberOfOperations == 0) {
                 reschedule();
                 return;
@@ -168,7 +162,7 @@ public class TranslogService extends AbstractIndexShardComponent implements Clos
             }
 
             if (flushThresholdSize.bytes() > 0) {
-                long sizeInBytes = translog.translogSizeInBytes();
+                long sizeInBytes = translog.sizeInBytes();
                 if (sizeInBytes > flushThresholdSize.bytes()) {
                     logger.trace("flushing translog, size [{}], breached [{}]", new ByteSizeValue(sizeInBytes), flushThresholdSize);
                     asyncFlushAndReschedule();

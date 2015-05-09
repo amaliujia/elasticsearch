@@ -21,7 +21,6 @@ package org.elasticsearch.client;
 
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthRequest;
 import org.elasticsearch.action.admin.cluster.node.info.NodesInfoRequest;
-import org.elasticsearch.action.admin.cluster.node.shutdown.NodesShutdownRequest;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsRequest;
 import org.elasticsearch.action.admin.cluster.repositories.delete.DeleteRepositoryRequest;
 import org.elasticsearch.action.admin.cluster.repositories.get.GetRepositoriesRequest;
@@ -53,11 +52,9 @@ import org.elasticsearch.action.admin.indices.settings.put.UpdateSettingsRequest
 import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.count.CountRequest;
 import org.elasticsearch.action.delete.DeleteRequest;
-import org.elasticsearch.action.deletebyquery.DeleteByQueryRequest;
 import org.elasticsearch.action.exists.ExistsRequest;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.action.mlt.MoreLikeThisRequest;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchScrollRequest;
 import org.elasticsearch.action.suggest.SuggestRequest;
@@ -114,18 +111,6 @@ public class Requests {
     }
 
     /**
-     * Creates a delete by query request. Note, the query itself must be set either by setting the JSON source
-     * of the query, or by using a {@link org.elasticsearch.index.query.QueryBuilder} (using {@link org.elasticsearch.index.query.QueryBuilders}).
-     *
-     * @param indices The indices the delete by query against. Use <tt>null</tt> or <tt>_all</tt> to execute against all indices
-     * @return The delete by query request
-     * @see org.elasticsearch.client.Client#deleteByQuery(org.elasticsearch.action.deletebyquery.DeleteByQueryRequest)
-     */
-    public static DeleteByQueryRequest deleteByQueryRequest(String... indices) {
-        return new DeleteByQueryRequest(indices);
-    }
-
-    /**
      * Creates a get request to get the JSON source from an index based on a type and id. Note, the
      * {@link GetRequest#type(String)} and {@link GetRequest#id(String)} must be set.
      *
@@ -170,19 +155,7 @@ public class Requests {
     public static SuggestRequest suggestRequest(String... indices) {
         return new SuggestRequest(indices);
     }
-
-    /**
-     * More like this request represents a request to search for documents that are "like" the provided (fetched)
-     * document.
-     *
-     * @param index The index to load the document from
-     * @return The more like this request
-     * @see org.elasticsearch.client.Client#moreLikeThis(org.elasticsearch.action.mlt.MoreLikeThisRequest)
-     */
-    public static MoreLikeThisRequest moreLikeThisRequest(String index) {
-        return new MoreLikeThisRequest(index);
-    }
-
+    
     /**
      * Creates a search request against one or more indices. Note, the search source must be set either using the
      * actual JSON search source, or the {@link org.elasticsearch.search.builder.SearchSourceBuilder}.
@@ -421,24 +394,6 @@ public class Requests {
      */
     public static ClusterStatsRequest clusterStatsRequest() {
         return new ClusterStatsRequest();
-    }
-
-    /**
-     * Shuts down all nodes in the cluster.
-     */
-    public static NodesShutdownRequest nodesShutdownRequest() {
-        return new NodesShutdownRequest();
-    }
-
-    /**
-     * Shuts down the specified nodes in the cluster.
-     *
-     * @param nodesIds The nodes ids to get the status for
-     * @return The nodes info request
-     * @see org.elasticsearch.client.ClusterAdminClient#nodesShutdown(org.elasticsearch.action.admin.cluster.node.shutdown.NodesShutdownRequest)
-     */
-    public static NodesShutdownRequest nodesShutdownRequest(String... nodesIds) {
-        return new NodesShutdownRequest(nodesIds);
     }
 
     /**

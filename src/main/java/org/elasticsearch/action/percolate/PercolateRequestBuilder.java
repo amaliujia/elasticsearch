@@ -18,17 +18,15 @@
  */
 package org.elasticsearch.action.percolate;
 
-import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.support.broadcast.BroadcastOperationRequestBuilder;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.ElasticsearchClient;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentType;
-import org.elasticsearch.index.query.FilterBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
-import org.elasticsearch.search.aggregations.AggregationBuilder;
+import org.elasticsearch.search.aggregations.AbstractAggregationBuilder;
 import org.elasticsearch.search.highlight.HighlightBuilder;
 import org.elasticsearch.search.sort.SortBuilder;
 
@@ -37,12 +35,12 @@ import java.util.Map;
 /**
  * A builder the easy to use of defining a percolate request.
  */
-public class PercolateRequestBuilder extends BroadcastOperationRequestBuilder<PercolateRequest, PercolateResponse, PercolateRequestBuilder, Client> {
+public class PercolateRequestBuilder extends BroadcastOperationRequestBuilder<PercolateRequest, PercolateResponse, PercolateRequestBuilder> {
 
     private PercolateSourceBuilder sourceBuilder;
 
-    public PercolateRequestBuilder(Client client) {
-        super(client, new PercolateRequest());
+    public PercolateRequestBuilder(ElasticsearchClient client, PercolateAction action) {
+        super(client, action, new PercolateRequest());
     }
 
     /**
@@ -146,14 +144,6 @@ public class PercolateRequestBuilder extends BroadcastOperationRequestBuilder<Pe
     }
 
     /**
-     * Delegates to {@link PercolateSourceBuilder#setFilterBuilder(FilterBuilder)}
-     */
-    public PercolateRequestBuilder setPercolateFilter(FilterBuilder filterBuilder) {
-        sourceBuilder().setFilterBuilder(filterBuilder);
-        return this;
-    }
-
-    /**
      * Delegates to {@link PercolateSourceBuilder#setHighlightBuilder(HighlightBuilder)}
      */
     public PercolateRequestBuilder setHighlightBuilder(HighlightBuilder highlightBuilder) {
@@ -162,9 +152,9 @@ public class PercolateRequestBuilder extends BroadcastOperationRequestBuilder<Pe
     }
 
     /**
-     * Delegates to {@link PercolateSourceBuilder#addAggregation(AggregationBuilder)}
+     * Delegates to {@link PercolateSourceBuilder#addAggregation(AbstractAggregationBuilder)}
      */
-    public PercolateRequestBuilder addAggregation(AggregationBuilder aggregationBuilder) {
+    public PercolateRequestBuilder addAggregation(AbstractAggregationBuilder aggregationBuilder) {
         sourceBuilder().addAggregation(aggregationBuilder);
         return this;
     }
@@ -250,11 +240,10 @@ public class PercolateRequestBuilder extends BroadcastOperationRequestBuilder<Pe
     }
 
     @Override
-    protected void doExecute(ActionListener<PercolateResponse> listener) {
+    protected PercolateRequest beforeExecute(PercolateRequest request) {
         if (sourceBuilder != null) {
             request.source(sourceBuilder);
         }
-        client.percolate(request, listener);
+        return request;
     }
-
 }

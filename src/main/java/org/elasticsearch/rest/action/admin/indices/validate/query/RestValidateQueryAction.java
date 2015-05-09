@@ -57,19 +57,13 @@ public class RestValidateQueryAction extends BaseRestHandler {
     @Override
     public void handleRequest(final RestRequest request, final RestChannel channel, final Client client) {
         ValidateQueryRequest validateQueryRequest = new ValidateQueryRequest(Strings.splitStringByCommaToArray(request.param("index")));
-        validateQueryRequest.listenerThreaded(false);
         validateQueryRequest.indicesOptions(IndicesOptions.fromRequest(request, validateQueryRequest.indicesOptions()));
-        if (request.hasContent()) {
-            validateQueryRequest.source(request.content());
+        if (RestActions.hasBodyContent(request)) {
+            validateQueryRequest.source(RestActions.getRestContent(request));
         } else {
-            String source = request.param("source");
-            if (source != null) {
-                validateQueryRequest.source(source);
-            } else {
-                QuerySourceBuilder querySourceBuilder = RestActions.parseQuerySource(request);
-                if (querySourceBuilder != null) {
-                    validateQueryRequest.source(querySourceBuilder);
-                }
+            QuerySourceBuilder querySourceBuilder = RestActions.parseQuerySource(request);
+            if (querySourceBuilder != null) {
+                validateQueryRequest.source(querySourceBuilder);
             }
         }
         validateQueryRequest.types(Strings.splitStringByCommaToArray(request.param("type")));
@@ -77,6 +71,11 @@ public class RestValidateQueryAction extends BaseRestHandler {
             validateQueryRequest.explain(true);
         } else {
             validateQueryRequest.explain(false);
+        }
+        if (request.paramAsBoolean("rewrite", false)) {
+            validateQueryRequest.rewrite(true);
+        } else {
+            validateQueryRequest.rewrite(false);
         }
 
         client.admin().indices().validateQuery(validateQueryRequest, new RestBuilderListener<ValidateQueryResponse>(channel) {

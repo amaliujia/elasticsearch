@@ -20,12 +20,10 @@
 package org.elasticsearch.index.query;
 
 import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.Filter;
-import org.apache.lucene.search.FilterCachingPolicy;
 import org.apache.lucene.search.Query;
+import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.lucene.HashedBytesRef;
 import org.elasticsearch.common.xcontent.XContentParser;
 
 import java.io.IOException;
@@ -36,6 +34,7 @@ import java.io.IOException;
 public class ConstantScoreQueryParser implements QueryParser {
 
     public static final String NAME = "constant_score";
+    private static final ParseField INNER_QUERY_FIELD = new ParseField("filter", "query");
 
     @Inject
     public ConstantScoreQueryParser() {
@@ -50,62 +49,42 @@ public class ConstantScoreQueryParser implements QueryParser {
     public Query parse(QueryParseContext parseContext) throws IOException, QueryParsingException {
         XContentParser parser = parseContext.parser();
 
-        Filter filter = null;
-        boolean filterFound = false;
-        Query query = null;
+        Query filter = null;
         boolean queryFound = false;
         float boost = 1.0f;
-        FilterCachingPolicy cache = parseContext.autoFilterCachePolicy();
-        HashedBytesRef cacheKey = null;
 
         String currentFieldName = null;
         XContentParser.Token token;
         while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
             if (token == XContentParser.Token.FIELD_NAME) {
                 currentFieldName = parser.currentName();
+            } else if (parseContext.isDeprecatedSetting(currentFieldName)) {
+                // skip
             } else if (token == XContentParser.Token.START_OBJECT) {
-                if ("filter".equals(currentFieldName)) {
+                if (INNER_QUERY_FIELD.match(currentFieldName)) {
                     filter = parseContext.parseInnerFilter();
-                    filterFound = true;
-                } else if ("query".equals(currentFieldName)) {
-                    query = parseContext.parseInnerQuery();
                     queryFound = true;
                 } else {
-                    throw new QueryParsingException(parseContext.index(), "[constant_score] query does not support [" + currentFieldName + "]");
+                    throw new QueryParsingException(parseContext, "[constant_score] query does not support [" + currentFieldName + "]");
                 }
             } else if (token.isValue()) {
                 if ("boost".equals(currentFieldName)) {
                     boost = parser.floatValue();
-                } else if ("_cache".equals(currentFieldName)) {
-                    cache = parseContext.parseFilterCachePolicy();
-                } else if ("_cache_key".equals(currentFieldName) || "_cacheKey".equals(currentFieldName)) {
-                    cacheKey = new HashedBytesRef(parser.text());
                 } else {
-                    throw new QueryParsingException(parseContext.index(), "[constant_score] query does not support [" + currentFieldName + "]");
+                    throw new QueryParsingException(parseContext, "[constant_score] query does not support [" + currentFieldName + "]");
                 }
             }
         }
-        if (!filterFound && !queryFound) {
-            throw new QueryParsingException(parseContext.index(), "[constant_score] requires either 'filter' or 'query' element");
+        if (!queryFound) {
+            throw new QueryParsingException(parseContext, "[constant_score] requires a 'filter' element");
         }
 
-        if (query == null && filter == null) {
+        if (filter == null) {
             return null;
         }
 
-        if (filter != null) {
-            // cache the filter if possible needed
-            if (cache != null) {
-                filter = parseContext.cacheFilter(filter, cacheKey, cache);
-            }
-
-            Query query1 = new ConstantScoreQuery(filter);
-            query1.setBoost(boost);
-            return query1;
-        }
-        // Query
-        query = new ConstantScoreQuery(query);
-        query.setBoost(boost);
-        return query;
+        filter = new ConstantScoreQuery(filter);
+        filter.setBoost(boost);
+        return filter;
     }
 }

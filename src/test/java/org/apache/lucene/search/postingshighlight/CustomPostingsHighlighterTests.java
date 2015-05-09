@@ -28,19 +28,18 @@ import org.apache.lucene.search.*;
 import org.apache.lucene.search.highlight.DefaultEncoder;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.UnicodeUtil;
 import org.elasticsearch.search.highlight.HighlightUtils;
-import org.elasticsearch.test.ElasticsearchLuceneTestCase;
+import org.elasticsearch.test.ElasticsearchTestCase;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.util.*;
 
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.notNullValue;
 
-@LuceneTestCase.SuppressCodecs({"MockFixedIntBlock", "MockVariableIntBlock", "MockSep", "MockRandom", "Lucene3x"})
-public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase {
+public class CustomPostingsHighlighterTests extends ElasticsearchTestCase {
 
     @Test
     public void testDiscreteHighlightingPerValue() throws Exception {
@@ -81,9 +80,9 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         IndexSearcher searcher = newSearcher(ir);
 
         Query query = new TermQuery(new Term("body", "highlighting"));
-        BytesRef[] queryTerms = filterTerms(extractTerms(query), "body", true);
+        BytesRef[] queryTerms = filterTerms(extractTerms(searcher, query), "body", true);
 
-        TopDocs topDocs = searcher.search(query, null, 10, Sort.INDEXORDER);
+        TopDocs topDocs = searcher.search(query, 10, Sort.INDEXORDER);
         assertThat(topDocs.totalHits, equalTo(1));
         int docId = topDocs.scoreDocs[0].doc;
 
@@ -91,15 +90,15 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         CustomPostingsHighlighter highlighter = new CustomPostingsHighlighter(new CustomPassageFormatter("<b>", "</b>", new DefaultEncoder()), fieldValues, false, Integer.MAX_VALUE - 1, 0);
         highlighter.setBreakIterator(new WholeBreakIterator());
 
-        Snippet[] snippets = highlighter.highlightDoc("body", queryTerms, searcher, docId, 5);
+        Snippet[] snippets = highlighter.highlightDoc("body", queryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(1));
         assertThat(snippets[0].getText(), equalTo("This is a test. Just a test <b>highlighting</b> from postings highlighter."));
 
-        snippets = highlighter.highlightDoc("body", queryTerms, searcher, docId, 5);
+        snippets = highlighter.highlightDoc("body", queryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(1));
         assertThat(snippets[0].getText(), equalTo("This is the second value to perform <b>highlighting</b> on."));
 
-        snippets = highlighter.highlightDoc("body", queryTerms, searcher, docId, 5);
+        snippets = highlighter.highlightDoc("body", queryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(1));
         assertThat(snippets[0].getText(), equalTo("This is the third value to test <b>highlighting</b> with postings."));
 
@@ -107,15 +106,15 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         //let's try without whole break iterator as well, to prove that highlighting works the same when working per value (not optimized though)
         highlighter = new CustomPostingsHighlighter(new CustomPassageFormatter("<b>", "</b>", new DefaultEncoder()), fieldValues, false, Integer.MAX_VALUE - 1, 0);
 
-        snippets = highlighter.highlightDoc("body", queryTerms, searcher, docId, 5);
+        snippets = highlighter.highlightDoc("body", queryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(1));
         assertThat(snippets[0].getText(), equalTo("Just a test <b>highlighting</b> from postings highlighter."));
 
-        snippets = highlighter.highlightDoc("body", queryTerms, searcher, docId, 5);
+        snippets = highlighter.highlightDoc("body", queryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(1));
         assertThat(snippets[0].getText(), equalTo("This is the second value to perform <b>highlighting</b> on."));
 
-        snippets = highlighter.highlightDoc("body", queryTerms, searcher, docId, 5);
+        snippets = highlighter.highlightDoc("body", queryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(1));
         assertThat(snippets[0].getText(), equalTo("This is the third value to test <b>highlighting</b> with postings."));
 
@@ -176,9 +175,9 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
 
         IndexSearcher searcher = newSearcher(ir);
         Query query = new TermQuery(new Term("body", "highlighting"));
-        BytesRef[] queryTerms = filterTerms(extractTerms(query), "body", true);
+        BytesRef[] queryTerms = filterTerms(extractTerms(searcher, query), "body", true);
 
-        TopDocs topDocs = searcher.search(query, null, 10, Sort.INDEXORDER);
+        TopDocs topDocs = searcher.search(query, 10, Sort.INDEXORDER);
         assertThat(topDocs.totalHits, equalTo(1));
 
         int docId = topDocs.scoreDocs[0].doc;
@@ -191,7 +190,7 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
 
         boolean mergeValues = true;
         CustomPostingsHighlighter highlighter = new CustomPostingsHighlighter(new CustomPassageFormatter("<b>", "</b>", new DefaultEncoder()), fieldValues, mergeValues, Integer.MAX_VALUE-1, 0);
-        Snippet[] snippets = highlighter.highlightDoc("body", queryTerms, searcher, docId, 5);
+        Snippet[] snippets = highlighter.highlightDoc("body", queryTerms, ir, docId, 5);
 
         assertThat(snippets.length, equalTo(4));
 
@@ -206,7 +205,7 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         highlighter = new CustomPostingsHighlighter(new CustomPassageFormatter("<b>", "</b>", new DefaultEncoder()), fieldValues, mergeValues, Integer.MAX_VALUE-1, 0);
         List<Snippet> snippets2 = new ArrayList<>();
         for (int i = 0; i < fieldValues.size(); i++) {
-            snippets2.addAll(Arrays.asList(highlighter.highlightDoc("body", queryTerms, searcher, docId, 5)));
+            snippets2.addAll(Arrays.asList(highlighter.highlightDoc("body", queryTerms, ir, docId, 5)));
         }
 
         assertThat(snippets2.size(), equalTo(4));
@@ -291,9 +290,9 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
 
         IndexSearcher searcher = newSearcher(ir);
         Query query = new TermQuery(new Term("body", "highlighting"));
-        BytesRef[] queryTerms = filterTerms(extractTerms(query), "body", true);
+        BytesRef[] queryTerms = filterTerms(extractTerms(searcher, query), "body", true);
 
-        TopDocs topDocs = searcher.search(query, null, 10, Sort.INDEXORDER);
+        TopDocs topDocs = searcher.search(query, 10, Sort.INDEXORDER);
         assertThat(topDocs.totalHits, equalTo(1));
 
         int docId = topDocs.scoreDocs[0].doc;
@@ -306,7 +305,7 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
 
         boolean mergeValues = true;
         CustomPostingsHighlighter highlighter = new CustomPostingsHighlighter(new CustomPassageFormatter("<b>", "</b>", new DefaultEncoder()), fieldValues, mergeValues, Integer.MAX_VALUE-1, 0);
-        Snippet[] snippets = highlighter.highlightDoc("body", queryTerms, searcher, docId, 5);
+        Snippet[] snippets = highlighter.highlightDoc("body", queryTerms, ir, docId, 5);
 
         assertThat(snippets.length, equalTo(4));
 
@@ -378,10 +377,9 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         iw.close();
 
         Query query = new TermQuery(new Term("none", "highlighting"));
-        SortedSet<Term> queryTerms = extractTerms(query);
-
         IndexSearcher searcher = newSearcher(ir);
-        TopDocs topDocs = searcher.search(query, null, 10, Sort.INDEXORDER);
+        SortedSet<Term> queryTerms = extractTerms(searcher, query);
+        TopDocs topDocs = searcher.search(query, 10, Sort.INDEXORDER);
         assertThat(topDocs.totalHits, equalTo(1));
         int docId = topDocs.scoreDocs[0].doc;
 
@@ -394,7 +392,7 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         //no snippets with simulated require field match (we filter the terms ourselves)
         boolean requireFieldMatch = true;
         BytesRef[] filteredQueryTerms = filterTerms(queryTerms, "body", requireFieldMatch);
-        Snippet[] snippets = highlighter.highlightDoc("body", filteredQueryTerms, searcher, docId, 5);
+        Snippet[] snippets = highlighter.highlightDoc("body", filteredQueryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(0));
 
 
@@ -402,7 +400,7 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         //one snippet without require field match, just passing in the query terms with no filtering on our side
         requireFieldMatch = false;
         filteredQueryTerms = filterTerms(queryTerms, "body", requireFieldMatch);
-        snippets = highlighter.highlightDoc("body", filteredQueryTerms, searcher, docId, 5);
+        snippets = highlighter.highlightDoc("body", filteredQueryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(1));
         assertThat(snippets[0].getText(), equalTo("Just a test <b>highlighting</b> from postings."));
 
@@ -434,10 +432,10 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         iw.close();
 
         Query query = new TermQuery(new Term("none", "highlighting"));
-        SortedSet<Term> queryTerms = extractTerms(query);
 
         IndexSearcher searcher = newSearcher(ir);
-        TopDocs topDocs = searcher.search(query, null, 10, Sort.INDEXORDER);
+        SortedSet<Term> queryTerms = extractTerms(searcher, query);
+        TopDocs topDocs = searcher.search(query, 10, Sort.INDEXORDER);
         assertThat(topDocs.totalHits, equalTo(1));
         int docId = topDocs.scoreDocs[0].doc;
 
@@ -448,11 +446,11 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         CustomPassageFormatter passageFormatter = new CustomPassageFormatter("<b>", "</b>", new DefaultEncoder());
 
         CustomPostingsHighlighter highlighter = new CustomPostingsHighlighter(passageFormatter, values, true, Integer.MAX_VALUE - 1, 0);
-        Snippet[] snippets = highlighter.highlightDoc("body", filteredQueryTerms, searcher, docId, 5);
+        Snippet[] snippets = highlighter.highlightDoc("body", filteredQueryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(0));
 
         highlighter = new CustomPostingsHighlighter(passageFormatter, values, true, Integer.MAX_VALUE - 1, scaledRandomIntBetween(1, 10));
-        snippets = highlighter.highlightDoc("body", filteredQueryTerms, searcher, docId, 5);
+        snippets = highlighter.highlightDoc("body", filteredQueryTerms, ir, docId, 5);
         assertThat(snippets.length, equalTo(1));
         assertThat(snippets[0].getText(), equalTo("This is a test."));
 
@@ -460,9 +458,13 @@ public class CustomPostingsHighlighterTests extends ElasticsearchLuceneTestCase 
         dir.close();
     }
 
-    private static SortedSet<Term> extractTerms(Query query) {
+    private static SortedSet<Term> extractTerms(IndexSearcher searcher, Query query) throws IOException {
+        return extractTerms(searcher.createNormalizedWeight(query, false));
+    }
+
+    private static SortedSet<Term> extractTerms(Weight weight) {
         SortedSet<Term> queryTerms = new TreeSet<>();
-        query.extractTerms(queryTerms);
+        weight.extractTerms(queryTerms);
         return queryTerms;
     }
 

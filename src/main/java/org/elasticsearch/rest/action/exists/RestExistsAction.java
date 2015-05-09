@@ -48,18 +48,12 @@ public class RestExistsAction extends BaseRestHandler {
     public void handleRequest(final RestRequest request, final RestChannel channel, final Client client) {
         final ExistsRequest existsRequest = new ExistsRequest(Strings.splitStringByCommaToArray(request.param("index")));
         existsRequest.indicesOptions(IndicesOptions.fromRequest(request, existsRequest.indicesOptions()));
-        existsRequest.listenerThreaded(false);
-        if (request.hasContent()) {
-            existsRequest.source(request.content());
+        if (RestActions.hasBodyContent(request)) {
+            existsRequest.source(RestActions.getRestContent(request));
         } else {
-            String source = request.param("source");
-            if (source != null) {
-                existsRequest.source(source);
-            } else {
-                QuerySourceBuilder querySourceBuilder = RestActions.parseQuerySource(request);
-                if (querySourceBuilder != null) {
-                    existsRequest.source(querySourceBuilder);
-                }
+            QuerySourceBuilder querySourceBuilder = RestActions.parseQuerySource(request);
+            if (querySourceBuilder != null) {
+                existsRequest.source(querySourceBuilder);
             }
         }
         existsRequest.routing(request.param("routing"));

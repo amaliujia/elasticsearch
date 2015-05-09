@@ -36,10 +36,13 @@ public class CachedDfSource extends IndexSearcher {
 
     private final int maxDoc;
 
-    public CachedDfSource(IndexReader reader, AggregatedDfs aggregatedDfs, Similarity similarity) throws IOException {
+    public CachedDfSource(IndexReader reader, AggregatedDfs aggregatedDfs, Similarity similarity,
+            QueryCache queryCache, QueryCachingPolicy queryCachingPolicy) throws IOException {
         super(reader);
         this.aggregatedDfs = aggregatedDfs;
         setSimilarity(similarity);
+        setQueryCache(queryCache);
+        setQueryCachingPolicy(queryCachingPolicy);
         if (aggregatedDfs.maxDoc() > Integer.MAX_VALUE) {
             maxDoc = Integer.MAX_VALUE;
         } else {
@@ -70,15 +73,6 @@ public class CachedDfSource extends IndexSearcher {
     
     public int maxDoc() {
         return this.maxDoc;
-    }
-
-    @Override
-    public Query rewrite(Query query) {
-        // this is a bit of a hack. We know that a query which
-        // creates a Weight based on this Dummy-Searcher is
-        // always already rewritten (see preparedWeight()).
-        // Therefore we just return the unmodified query here
-        return query;
     }
 
     @Override

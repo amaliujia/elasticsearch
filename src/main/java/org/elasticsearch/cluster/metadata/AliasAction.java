@@ -20,7 +20,6 @@
 package org.elasticsearch.cluster.metadata;
 
 import org.elasticsearch.ElasticsearchGenerationException;
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -29,7 +28,7 @@ import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentType;
-import org.elasticsearch.index.query.FilterBuilder;
+import org.elasticsearch.index.query.QueryBuilder;
 
 import java.io.IOException;
 import java.util.Map;
@@ -59,7 +58,7 @@ public class AliasAction implements Streamable {
             } else if (value == 1) {
                 return REMOVE;
             } else {
-                throw new ElasticsearchIllegalArgumentException("No type for action [" + value + "]");
+                throw new IllegalArgumentException("No type for action [" + value + "]");
             }
         }
     }
@@ -155,7 +154,7 @@ public class AliasAction implements Streamable {
         }
     }
 
-    public AliasAction filter(FilterBuilder filterBuilder) {
+    public AliasAction filter(QueryBuilder filterBuilder) {
         if (filterBuilder == null) {
             this.filter = null;
             return this;

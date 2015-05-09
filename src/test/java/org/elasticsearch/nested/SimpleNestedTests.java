@@ -19,7 +19,6 @@
 
 package org.elasticsearch.nested;
 
-import com.carrotsearch.randomizedtesting.annotations.Seed;
 import org.apache.lucene.search.Explanation;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthStatus;
 import org.elasticsearch.action.admin.cluster.stats.ClusterStatsResponse;
@@ -34,7 +33,6 @@ import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
-import org.elasticsearch.index.query.FilterBuilders;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.sort.SortBuilders;
 import org.elasticsearch.search.sort.SortOrder;
@@ -47,10 +45,25 @@ import java.util.List;
 
 import static org.elasticsearch.common.settings.ImmutableSettings.settingsBuilder;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.index.query.FilterBuilders.*;
-import static org.elasticsearch.index.query.QueryBuilders.*;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.*;
-import static org.hamcrest.Matchers.*;
+import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
+import static org.elasticsearch.index.query.QueryBuilders.filteredQuery;
+import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
+import static org.elasticsearch.index.query.QueryBuilders.nestedQuery;
+import static org.elasticsearch.index.query.QueryBuilders.rangeQuery;
+import static org.elasticsearch.index.query.QueryBuilders.termQuery;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAllSuccessful;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertHitCount;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
+import static org.hamcrest.Matchers.arrayContaining;
+import static org.hamcrest.Matchers.arrayContainingInAnyOrder;
+import static org.hamcrest.Matchers.arrayWithSize;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.startsWith;
 
 public class SimpleNestedTests extends ElasticsearchIntegrationTest {
 
@@ -136,7 +149,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
         assertThat(searchResponse.getHits().totalHits(), equalTo(1l));
 
         // filter
-        searchResponse = client().prepareSearch("test").setQuery(filteredQuery(matchAllQuery(), nestedFilter("nested1",
+        searchResponse = client().prepareSearch("test").setQuery(filteredQuery(matchAllQuery(), nestedQuery("nested1",
                 boolQuery().must(termQuery("nested1.n_field1", "n_value1_1")).must(termQuery("nested1.n_field2", "n_value2_1"))))).execute().actionGet();
         assertNoFailures(searchResponse);
         assertThat(searchResponse.getHits().totalHits(), equalTo(1l));
@@ -164,7 +177,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
         assertThat(searchResponse.getHits().totalHits(), equalTo(1l));
     }
 
-    @Test
+    @Test @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/10661")
     public void simpleNestedMatchQueries() throws Exception {
         XContentBuilder builder = jsonBuilder().startObject()
                 .startObject("type1")
@@ -257,113 +270,6 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void simpleNestedDeletedByQuery1() throws Exception {
-        simpleNestedDeleteByQuery(3, 0);
-    }
-
-    @Test
-    public void simpleNestedDeletedByQuery2() throws Exception {
-        simpleNestedDeleteByQuery(3, 1);
-    }
-
-    @Test
-    public void simpleNestedDeletedByQuery3() throws Exception {
-        simpleNestedDeleteByQuery(3, 2);
-    }
-
-    private void simpleNestedDeleteByQuery(int total, int docToDelete) throws Exception {
-
-        assertAcked(prepareCreate("test")
-                .setSettings(settingsBuilder().put(indexSettings()).put("index.referesh_interval", -1).build())
-                .addMapping("type1", jsonBuilder().startObject().startObject("type1").startObject("properties")
-                        .startObject("nested1")
-                        .field("type", "nested")
-                        .endObject()
-                        .endObject().endObject().endObject()));
-
-        ensureGreen();
-
-        for (int i = 0; i < total; i++) {
-            client().prepareIndex("test", "type1", Integer.toString(i)).setSource(jsonBuilder().startObject()
-                    .field("field1", "value1")
-                    .startArray("nested1")
-                    .startObject()
-                    .field("n_field1", "n_value1_1")
-                    .field("n_field2", "n_value2_1")
-                    .endObject()
-                    .startObject()
-                    .field("n_field1", "n_value1_2")
-                    .field("n_field2", "n_value2_2")
-                    .endObject()
-                    .endArray()
-                    .endObject()).execute().actionGet();
-        }
-
-
-        flush();
-        assertDocumentCount("test", total * 3);
-
-        client().prepareDeleteByQuery("test").setQuery(QueryBuilders.idsQuery("type1").ids(Integer.toString(docToDelete))).execute().actionGet();
-        flush();
-        refresh();
-        assertDocumentCount("test", (total * 3l) - 3);
-
-        for (int i = 0; i < total; i++) {
-            assertThat(client().prepareGet("test", "type1", Integer.toString(i)).execute().actionGet().isExists(), equalTo(i != docToDelete));
-        }
-    }
-
-    @Test
-    public void noChildrenNestedDeletedByQuery1() throws Exception {
-        noChildrenNestedDeleteByQuery(3, 0);
-    }
-
-    @Test
-    public void noChildrenNestedDeletedByQuery2() throws Exception {
-        noChildrenNestedDeleteByQuery(3, 1);
-    }
-
-    @Test
-    public void noChildrenNestedDeletedByQuery3() throws Exception {
-        noChildrenNestedDeleteByQuery(3, 2);
-    }
-
-    private void noChildrenNestedDeleteByQuery(long total, int docToDelete) throws Exception {
-
-        assertAcked(prepareCreate("test")
-                .setSettings(settingsBuilder().put(indexSettings()).put("index.referesh_interval", -1).build())
-                .addMapping("type1", jsonBuilder().startObject().startObject("type1").startObject("properties")
-                        .startObject("nested1")
-                        .field("type", "nested")
-                        .endObject()
-                        .endObject().endObject().endObject()));
-
-        ensureGreen();
-
-
-        for (int i = 0; i < total; i++) {
-            client().prepareIndex("test", "type1", Integer.toString(i)).setSource(jsonBuilder().startObject()
-                    .field("field1", "value1")
-                    .endObject()).execute().actionGet();
-        }
-
-
-        flush();
-        refresh();
-
-        assertDocumentCount("test", total);
-
-        client().prepareDeleteByQuery("test").setQuery(QueryBuilders.idsQuery("type1").ids(Integer.toString(docToDelete))).execute().actionGet();
-        flush();
-        refresh();
-        assertDocumentCount("test", total - 1);
-
-        for (int i = 0; i < total; i++) {
-            assertThat(client().prepareGet("test", "type1", Integer.toString(i)).execute().actionGet().isExists(), equalTo(i != docToDelete));
-        }
-    }
-
-    @Test
     public void multiNested() throws Exception {
         assertAcked(prepareCreate("test")
                 .addMapping("type1", jsonBuilder().startObject().startObject("type1").startObject("properties")
@@ -450,7 +356,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                         .endObject().endObject().endObject()));
 
         client().admin().indices().prepareAliases()
-                .addAlias("test", "alias1", FilterBuilders.termFilter("field1", "value1")).execute().actionGet();
+                .addAlias("test", "alias1", QueryBuilders.termQuery("field1", "value1")).execute().actionGet();
 
         ensureGreen();
 
@@ -487,15 +393,6 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
         flush();
         refresh();
         assertDocumentCount("test", 6);
-
-        client().prepareDeleteByQuery("alias1").setQuery(QueryBuilders.matchAllQuery()).execute().actionGet();
-        flush();
-        refresh();
-
-        // This must be 3, otherwise child docs aren't deleted.
-        // If this is 5 then only the parent has been removed
-        assertDocumentCount("test", 3);
-        assertThat(client().prepareGet("test", "type1", "1").execute().actionGet().isExists(), equalTo(false));
     }
 
     @Test
@@ -532,7 +429,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
         assertThat(searchResponse.getHits().totalHits(), equalTo(1l));
         Explanation explanation = searchResponse.getHits().hits()[0].explanation();
         assertThat(explanation.getValue(), equalTo(2f));
-        assertThat(explanation.getDescription(), equalTo("Score based on child doc range from 0 to 1"));
+        assertThat(explanation.toString(), startsWith("2.0 = sum of:\n  2.0 = Score based on child doc range from 0 to 1\n"));
         // TODO: Enable when changes from BlockJoinQuery#explain are added to Lucene (Most likely version 4.2)
 //        assertThat(explanation.getDetails().length, equalTo(2));
 //        assertThat(explanation.getDetails()[0].getValue(), equalTo(1f));
@@ -656,7 +553,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .setTypes("type1")
                 .setQuery(QueryBuilders.matchAllQuery())
                 .addSort(SortBuilders.scriptSort("_fields['nested1.field1'].value", "number")
-                        .setNestedFilter(rangeFilter("nested1.field1").from(1).to(3))
+                        .setNestedFilter(rangeQuery("nested1.field1").from(1).to(3))
                         .setNestedPath("nested1").sortMode("avg").order(SortOrder.DESC))
                 .execute().actionGet();
 
@@ -707,7 +604,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                     .execute().actionGet();
             Assert.fail("SearchPhaseExecutionException should have been thrown");
         } catch (SearchPhaseExecutionException e) {
-            assertThat(e.getMessage(), containsString("type [string] doesn't support mode [SUM]"));
+            assertThat(e.toString(), containsString("type [string] doesn't support mode [SUM]"));
         }
     }
 
@@ -777,7 +674,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
 
         SearchRequestBuilder searchRequestBuilder = client().prepareSearch("test").setTypes("type1")
                 .setQuery(QueryBuilders.matchAllQuery())
-                .addSort(SortBuilders.fieldSort("nested1.field1").setNestedFilter(termFilter("nested1.field2", true)).missing(10).order(SortOrder.ASC));
+                .addSort(SortBuilders.fieldSort("nested1.field1").setNestedFilter(termQuery("nested1.field2", true)).missing(10).order(SortOrder.ASC));
 
         if (randomBoolean()) {
             searchRequestBuilder.setScroll("10m");
@@ -794,7 +691,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
         assertThat(searchResponse.getHits().hits()[2].sortValues()[0].toString(), equalTo("10"));
 
         searchRequestBuilder = client().prepareSearch("test").setTypes("type1").setQuery(QueryBuilders.matchAllQuery())
-                .addSort(SortBuilders.fieldSort("nested1.field1").setNestedFilter(termFilter("nested1.field2", true)).missing(10).order(SortOrder.DESC));
+                .addSort(SortBuilders.fieldSort("nested1.field1").setNestedFilter(termQuery("nested1.field2", true)).missing(10).order(SortOrder.DESC));
 
         if (randomBoolean()) {
             searchRequestBuilder.setScroll("10m");
@@ -955,7 +852,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .addSort(
                         SortBuilders.fieldSort("parent.child.child_values")
                                 .setNestedPath("parent.child")
-                                .setNestedFilter(FilterBuilders.termFilter("parent.child.filter", true))
+                                .setNestedFilter(QueryBuilders.termQuery("parent.child.filter", true))
                                 .order(SortOrder.ASC)
                 )
                 .execute().actionGet();
@@ -973,7 +870,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .setQuery(matchAllQuery())
                 .addSort(
                         SortBuilders.fieldSort("parent.child.child_values")
-                                .setNestedFilter(FilterBuilders.termFilter("parent.child.filter", true))
+                                .setNestedFilter(QueryBuilders.termQuery("parent.child.filter", true))
                                 .order(SortOrder.ASC)
                 )
                 .execute().actionGet();
@@ -992,7 +889,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .addSort(
                         SortBuilders.fieldSort("parent.parent_values")
                                 .setNestedPath("parent.child")
-                                .setNestedFilter(FilterBuilders.termFilter("parent.filter", false))
+                                .setNestedFilter(QueryBuilders.termQuery("parent.filter", false))
                                 .order(SortOrder.ASC)
                 )
                 .execute().actionGet();
@@ -1011,7 +908,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .addSort(
                         SortBuilders.fieldSort("parent.child.child_values")
                                 .setNestedPath("parent.child")
-                                .setNestedFilter(FilterBuilders.termFilter("parent.filter", false))
+                                .setNestedFilter(QueryBuilders.termQuery("parent.filter", false))
                                 .order(SortOrder.ASC)
                 )
                 .execute().actionGet();
@@ -1031,7 +928,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .setQuery(matchAllQuery())
                 .addSort(
                         SortBuilders.fieldSort("parent.child.child_obj.value")
-                                .setNestedFilter(FilterBuilders.termFilter("parent.child.filter", true))
+                                .setNestedFilter(QueryBuilders.termQuery("parent.child.filter", true))
                                 .order(SortOrder.ASC)
                 )
                 .execute().actionGet();
@@ -1091,7 +988,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .addSort(
                         SortBuilders.fieldSort("parent.child.child_values")
                                 .setNestedPath("parent.child")
-                                .setNestedFilter(FilterBuilders.termFilter("parent.child.filter", true))
+                                .setNestedFilter(QueryBuilders.termQuery("parent.child.filter", true))
                                 .sortMode("sum")
                                 .order(SortOrder.ASC)
                 )
@@ -1151,7 +1048,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .addSort(
                         SortBuilders.fieldSort("parent.child.child_values")
                                 .setNestedPath("parent.child")
-                                .setNestedFilter(FilterBuilders.termFilter("parent.child.filter", true))
+                                .setNestedFilter(QueryBuilders.termQuery("parent.child.filter", true))
                                 .sortMode("avg")
                                 .order(SortOrder.ASC)
                 )
@@ -1291,7 +1188,7 @@ public class SimpleNestedTests extends ElasticsearchIntegrationTest {
                 .addSort(SortBuilders.fieldSort("users.first")
                         .order(SortOrder.ASC)
                         .setNestedPath("users")
-                        .setNestedFilter(nestedFilter("users.workstations", termFilter("users.workstations.stationid", "s5"))))
+                        .setNestedFilter(nestedQuery("users.workstations", termQuery("users.workstations.stationid", "s5"))))
                 .get();
         assertNoFailures(searchResponse);
         assertHitCount(searchResponse, 2);

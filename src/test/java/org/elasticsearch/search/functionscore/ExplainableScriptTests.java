@@ -49,7 +49,6 @@ import java.util.concurrent.ExecutionException;
 import static org.elasticsearch.client.Requests.searchRequest;
 import static org.elasticsearch.common.settings.ImmutableSettings.settingsBuilder;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.index.query.FilterBuilders.termFilter;
 import static org.elasticsearch.index.query.QueryBuilders.functionScoreQuery;
 import static org.elasticsearch.index.query.QueryBuilders.termQuery;
 import static org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders.scriptFunction;
@@ -108,11 +107,8 @@ public class ExplainableScriptTests extends ElasticsearchIntegrationTest {
 
         @Override
         public Explanation explain(Explanation subQueryScore) throws IOException {
-            Explanation exp = new Explanation((float) (runAsDouble()), "This script returned " + runAsDouble());
-            Explanation scoreExp = new Explanation(subQueryScore.getValue(), "_score: ");
-            scoreExp.addDetail(subQueryScore);
-            exp.addDetail(scoreExp);
-            return exp;
+            Explanation scoreExp = Explanation.match(subQueryScore.getValue(), "_score: ", subQueryScore);
+            return Explanation.match((float) (runAsDouble()), "This script returned " + runAsDouble(), scoreExp);
         }
 
         @Override

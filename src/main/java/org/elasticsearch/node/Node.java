@@ -21,7 +21,6 @@ package org.elasticsearch.node;
 
 import org.elasticsearch.Build;
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.ElasticsearchIllegalStateException;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionModule;
 import org.elasticsearch.cache.recycler.PageCacheRecycler;
@@ -76,6 +75,7 @@ import org.elasticsearch.monitor.MonitorService;
 import org.elasticsearch.monitor.jvm.JvmInfo;
 import org.elasticsearch.node.internal.InternalSettingsPreparer;
 import org.elasticsearch.node.internal.NodeModule;
+import org.elasticsearch.node.settings.NodeSettingsService;
 import org.elasticsearch.percolator.PercolatorModule;
 import org.elasticsearch.percolator.PercolatorService;
 import org.elasticsearch.plugins.PluginsModule;
@@ -123,11 +123,11 @@ public class Node implements Releasable {
     private final PluginsService pluginsService;
     private final Client client;
 
-    public Node() throws ElasticsearchException {
+    public Node() {
         this(ImmutableSettings.Builder.EMPTY_SETTINGS, true);
     }
 
-    public Node(Settings preparedSettings, boolean loadConfigSettings) throws ElasticsearchException {
+    public Node(Settings preparedSettings, boolean loadConfigSettings) {
         final Settings pSettings = settingsBuilder().put(preparedSettings)
                 .put(Client.CLIENT_TYPE_SETTING, CLIENT_TYPE).build();
         Tuple<Settings, Environment> tuple = InternalSettingsPreparer.prepareSettings(pSettings, loadConfigSettings);
@@ -143,9 +143,8 @@ public class Node implements Releasable {
 
         if (logger.isDebugEnabled()) {
             Environment env = tuple.v2();
-            logger.debug("using home [{}], config [{}], data [{}], logs [{}], work [{}], plugins [{}]",
-                    env.homeFile(), env.configFile(), Arrays.toString(env.dataFiles()), env.logsFile(),
-                    env.workFile(), env.pluginsFile());
+            logger.debug("using home [{}], config [{}], data [{}], logs [{}], plugins [{}]",
+                    env.homeFile(), env.configFile(), Arrays.toString(env.dataFiles()), env.logsFile(), env.pluginsFile());
         }
 
         this.pluginsService = new PluginsService(tuple.v1(), tuple.v2());
@@ -158,8 +157,10 @@ public class Node implements Releasable {
         try {
             nodeEnvironment = new NodeEnvironment(this.settings, this.environment);
         } catch (IOException ex) {
-            throw new ElasticsearchIllegalStateException("Failed to created node environment", ex);
+            throw new IllegalStateException("Failed to created node environment", ex);
         }
+
+        final ThreadPool threadPool = new ThreadPool(settings);
 
         boolean success = false;
         try {
@@ -176,7 +177,7 @@ public class Node implements Releasable {
             modules.add(new EnvironmentModule(environment));
             modules.add(new NodeEnvironmentModule(nodeEnvironment));
             modules.add(new ClusterNameModule(settings));
-            modules.add(new ThreadPoolModule(settings));
+            modules.add(new ThreadPoolModule(threadPool));
             modules.add(new DiscoveryModule(settings));
             modules.add(new ClusterModule(settings));
             modules.add(new RestModule(settings));
@@ -200,10 +201,12 @@ public class Node implements Releasable {
             injector = modules.createInjector();
 
             client = injector.getInstance(Client.class);
+            threadPool.setNodeSettingsService(injector.getInstance(NodeSettingsService.class));
             success = true;
         } finally {
             if (!success) {
                 nodeEnvironment.close();
+                ThreadPool.terminate(threadPool, 10, TimeUnit.SECONDS);
             }
         }
 
@@ -242,7 +245,7 @@ public class Node implements Releasable {
             injector.getInstance(plugin).start();
         }
 
-        injector.getInstance(MappingUpdatedAction.class).start();
+        injector.getInstance(MappingUpdatedAction.class).setClient(client);
         injector.getInstance(IndicesService.class).start();
         injector.getInstance(IndexingMemoryController.class).start();
         injector.getInstance(IndicesClusterStateService.class).start();
@@ -285,7 +288,6 @@ public class Node implements Releasable {
             injector.getInstance(HttpServer.class).stop();
         }
 
-        injector.getInstance(MappingUpdatedAction.class).stop();
         injector.getInstance(RiversManager.class).stop();
 
         injector.getInstance(SnapshotsService.class).stop();

@@ -25,6 +25,7 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.search.aggregations.AggregationStreams;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.metrics.InternalNumericMetricsAggregation;
+import org.elasticsearch.search.aggregations.reducers.Reducer;
 import org.elasticsearch.search.aggregations.support.format.ValueFormatter;
 import org.elasticsearch.search.aggregations.support.format.ValueFormatterStreams;
 
@@ -56,8 +57,8 @@ public class InternalMax extends InternalNumericMetricsAggregation.SingleValue i
 
     InternalMax() {} // for serialization
 
-    public InternalMax(String name, double max, @Nullable ValueFormatter formatter, Map<String, Object> metaData) {
-        super(name, metaData);
+    public InternalMax(String name, double max, @Nullable ValueFormatter formatter, List<Reducer> reducers, Map<String, Object> metaData) {
+        super(name, reducers, metaData);
         this.valueFormatter = formatter;
         this.max = max;
     }
@@ -78,12 +79,12 @@ public class InternalMax extends InternalNumericMetricsAggregation.SingleValue i
     }
 
     @Override
-    public InternalMax reduce(List<InternalAggregation> aggregations, ReduceContext reduceContext) {
+    public InternalMax doReduce(List<InternalAggregation> aggregations, ReduceContext reduceContext) {
         double max = Double.NEGATIVE_INFINITY;
         for (InternalAggregation aggregation : aggregations) {
             max = Math.max(max, ((InternalMax) aggregation).max);
         }
-        return new InternalMax(name, max, valueFormatter, getMetaData());
+        return new InternalMax(name, max, valueFormatter, reducers(), getMetaData());
     }
 
     @Override
@@ -102,7 +103,7 @@ public class InternalMax extends InternalNumericMetricsAggregation.SingleValue i
     public XContentBuilder doXContentBody(XContentBuilder builder, Params params) throws IOException {
         boolean hasValue = !Double.isInfinite(max);
         builder.field(CommonFields.VALUE, hasValue ? max : null);
-        if (hasValue && valueFormatter != null) {
+        if (hasValue && valueFormatter != null && !(valueFormatter instanceof ValueFormatter.Raw)) {
             builder.field(CommonFields.VALUE_AS_STRING, valueFormatter.format(max));
         }
         return builder;

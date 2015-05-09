@@ -20,23 +20,18 @@
 package org.elasticsearch.env;
 
 import org.elasticsearch.cluster.ClusterName;
-import org.elasticsearch.common.io.Streams;
+import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.settings.Settings;
 
-import com.google.common.base.Charsets;
-
-import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
-import java.nio.file.*;
-import java.util.Collections;
+import java.nio.file.FileStore;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 
 import static org.elasticsearch.common.Strings.cleanPath;
-import static org.elasticsearch.common.settings.ImmutableSettings.Builder.EMPTY_SETTINGS;
 
 /**
  * The environment of where things exists.
@@ -46,10 +41,6 @@ public class Environment {
     private final Settings settings;
 
     private final Path homeFile;
-
-    private final Path workFile;
-
-    private final Path workWithClusterFile;
 
     private final Path[] dataFiles;
 
@@ -61,43 +52,51 @@ public class Environment {
 
     private final Path logsFile;
 
-    public Environment() {
-        this(EMPTY_SETTINGS);
+    /** Path to the PID file (can be null if no PID file is configured) **/
+    private final Path pidFile;
+
+    /** List of filestores on the system */
+    private static final FileStore[] fileStores;
+
+    /**
+     * We have to do this in clinit instead of init, because ES code is pretty messy,
+     * and makes these environments, throws them away, makes them again, etc.
+     */
+    static {
+        // gather information about filesystems
+        ArrayList<FileStore> allStores = new ArrayList<>();
+        for (FileStore store : PathUtils.getDefaultFileSystem().getFileStores()) {
+            allStores.add(new ESFileStore(store));
+        }
+        fileStores = allStores.toArray(new ESFileStore[allStores.size()]);
     }
 
     public Environment(Settings settings) {
         this.settings = settings;
         if (settings.get("path.home") != null) {
-            homeFile = Paths.get(cleanPath(settings.get("path.home")));
+            homeFile = PathUtils.get(cleanPath(settings.get("path.home")));
         } else {
-            homeFile = Paths.get(System.getProperty("user.dir"));
+            throw new IllegalStateException("path.home is not configured");
         }
 
         if (settings.get("path.conf") != null) {
-            configFile = Paths.get(cleanPath(settings.get("path.conf")));
+            configFile = PathUtils.get(cleanPath(settings.get("path.conf")));
         } else {
             configFile = homeFile.resolve("config");
         }
 
         if (settings.get("path.plugins") != null) {
-            pluginsFile = Paths.get(cleanPath(settings.get("path.plugins")));
+            pluginsFile = PathUtils.get(cleanPath(settings.get("path.plugins")));
         } else {
             pluginsFile = homeFile.resolve("plugins");
         }
-
-        if (settings.get("path.work") != null) {
-            workFile = Paths.get(cleanPath(settings.get("path.work")));
-        } else {
-            workFile = homeFile.resolve("work");
-        }
-        workWithClusterFile = workFile.resolve(ClusterName.clusterNameFromSettings(settings).value());
 
         String[] dataPaths = settings.getAsArray("path.data");
         if (dataPaths.length > 0) {
             dataFiles = new Path[dataPaths.length];
             dataWithClusterFiles = new Path[dataPaths.length];
             for (int i = 0; i < dataPaths.length; i++) {
-                dataFiles[i] = Paths.get(dataPaths[i]);
+                dataFiles[i] = PathUtils.get(dataPaths[i]);
                 dataWithClusterFiles[i] = dataFiles[i].resolve(ClusterName.clusterNameFromSettings(settings).value());
             }
         } else {
@@ -106,9 +105,15 @@ public class Environment {
         }
 
         if (settings.get("path.logs") != null) {
-            logsFile = Paths.get(cleanPath(settings.get("path.logs")));
+            logsFile = PathUtils.get(cleanPath(settings.get("path.logs")));
         } else {
             logsFile = homeFile.resolve("logs");
+        }
+
+        if (settings.get("pidfile") != null) {
+            pidFile = PathUtils.get(cleanPath(settings.get("pidfile")));
+        } else {
+            pidFile = null;
         }
     }
 
@@ -124,26 +129,6 @@ public class Environment {
      */
     public Path homeFile() {
         return homeFile;
-    }
-
-    /**
-     * The work location, path to temp files.
-     *
-     * Note, currently, we don't use it in ES at all, we should strive to see if we can keep it like that,
-     * but if we do, we have the infra for it.
-     */
-    public Path workFile() {
-        return workFile;
-    }
-
-    /**
-     * The work location with the cluster name as a sub directory.
-     *
-     * Note, currently, we don't use it in ES at all, we should strive to see if we can keep it like that,
-     * but if we do, we have the infra for it.
-     */
-    public Path workWithClusterFile() {
-        return workWithClusterFile;
     }
 
     /**
@@ -175,27 +160,39 @@ public class Environment {
         return logsFile;
     }
 
+    /**
+     * The PID file location (can be null if no PID file is configured)
+     */
+    public Path pidFile() {
+        return pidFile;
+    }
+
+    /**
+     * Looks up the filestore associated with a Path.
+     * <p>
+     * This is an enhanced version of {@link Files#getFileStore(Path)}:
+     * <ul>
+     *   <li>On *nix systems, the store returned for the root filesystem will contain
+     *       the actual filesystem type (e.g. {@code ext4}) instead of {@code rootfs}.
+     *   <li>On some systems, the custom attribute {@code lucene:spins} is supported
+     *       via the {@link FileStore#getAttribute(String)} method.
+     *   <li>Only requires the security permissions of {@link Files#getFileStore(Path)},
+     *       no permissions to the actual mount point are required.
+     *   <li>Exception handling has the same semantics as {@link Files#getFileStore(Path)}.
+     * </ul>
+     */
+    public FileStore getFileStore(Path path) throws IOException {
+        return ESFileStore.getMatchingFileStore(path, fileStores);
+    }
+
     public URL resolveConfig(String path) throws FailedToResolveConfigException {
-        String origPath = path;
-        // first, try it as a path on the file system
-        Path f1 = Paths.get(path);
-        if (Files.exists(f1)) {
+        // first, try it as a path in the config directory
+        Path f = configFile.resolve(path);
+        if (Files.exists(f)) {
             try {
-                return f1.toUri().toURL();
+                return f.toUri().toURL();
             } catch (MalformedURLException e) {
-                throw new FailedToResolveConfigException("Failed to resolve path [" + f1 + "]", e);
-            }
-        }
-        if (path.startsWith("/")) {
-            path = path.substring(1);
-        }
-        // next, try it relative to the config location
-        Path f2 = configFile.resolve(path);
-        if (Files.exists(f2)) {
-            try {
-                return f2.toUri().toURL();
-            } catch (MalformedURLException e) {
-                throw new FailedToResolveConfigException("Failed to resolve path [" + f1 + "]", e);
+                throw new FailedToResolveConfigException("Failed to resolve path [" + f + "]", e);
             }
         }
         // try and load it from the classpath directly
@@ -210,6 +207,6 @@ public class Environment {
                 return resource;
             }
         }
-        throw new FailedToResolveConfigException("Failed to resolve config path [" + origPath + "], tried file path [" + f1 + "], path file [" + f2 + "], and classpath");
+        throw new FailedToResolveConfigException("Failed to resolve config path [" + path + "], tried config path [" + f + "] and classpath");
     }
 }

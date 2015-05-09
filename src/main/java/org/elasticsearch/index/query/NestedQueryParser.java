@@ -20,12 +20,12 @@
 package org.elasticsearch.index.query;
 
 import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.Filter;
 import org.apache.lucene.search.FilteredQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.join.ScoreMode;
 import org.apache.lucene.search.join.ToParentBlockJoinQuery;
 import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.inject.Inject;
@@ -40,6 +40,7 @@ import java.io.IOException;
 public class NestedQueryParser implements QueryParser {
 
     public static final String NAME = "nested";
+    private static final ParseField FILTER_FIELD = new ParseField("filter").withAllDeprecated("query");
 
     private final InnerHitsQueryParserHelper innerHitsQueryParserHelper;
 
@@ -70,12 +71,12 @@ public class NestedQueryParser implements QueryParser {
             } else if (token == XContentParser.Token.START_OBJECT) {
                 if ("query".equals(currentFieldName)) {
                     builder.query();
-                } else if ("filter".equals(currentFieldName)) {
+                } else if (FILTER_FIELD.match(currentFieldName)) {
                     builder.filter();
                 } else if ("inner_hits".equals(currentFieldName)) {
                     builder.setInnerHits(innerHitsQueryParserHelper.parse(parseContext));
                 } else {
-                    throw new QueryParsingException(parseContext.index(), "[nested] query does not support [" + currentFieldName + "]");
+                    throw new QueryParsingException(parseContext, "[nested] query does not support [" + currentFieldName + "]");
                 }
             } else if (token.isValue()) {
                 if ("path".equals(currentFieldName)) {
@@ -93,12 +94,12 @@ public class NestedQueryParser implements QueryParser {
                     } else if ("none".equals(sScoreMode)) {
                         scoreMode = ScoreMode.None;
                     } else {
-                        throw new QueryParsingException(parseContext.index(), "illegal score_mode for nested query [" + sScoreMode + "]");
+                        throw new QueryParsingException(parseContext, "illegal score_mode for nested query [" + sScoreMode + "]");
                     }
                 } else if ("_name".equals(currentFieldName)) {
                     queryName = parser.text();
                 } else {
-                    throw new QueryParsingException(parseContext.index(), "[nested] query does not support [" + currentFieldName + "]");
+                    throw new QueryParsingException(parseContext, "[nested] query does not support [" + currentFieldName + "]");
                 }
             }
         }
@@ -137,14 +138,14 @@ public class NestedQueryParser implements QueryParser {
             if (queryFound) {
                 innerQuery = getInnerQuery();
             } else if (filterFound) {
-                Filter innerFilter = getInnerFilter();
+                Query innerFilter = getInnerFilter();
                 if (innerFilter != null) {
                     innerQuery = new ConstantScoreQuery(getInnerFilter());
                 } else {
                     innerQuery = null;
                 }
             } else {
-                throw new QueryParsingException(parseContext.index(), "[nested] requires either 'query' or 'filter' field");
+                throw new QueryParsingException(parseContext, "[nested] requires either 'query' or 'filter' field");
             }
 
             if (innerHits != null) {

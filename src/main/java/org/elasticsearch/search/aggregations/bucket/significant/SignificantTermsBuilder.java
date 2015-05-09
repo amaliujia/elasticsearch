@@ -19,9 +19,8 @@
 
 package org.elasticsearch.search.aggregations.bucket.significant;
 
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.index.query.FilterBuilder;
+import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.significant.heuristics.SignificanceHeuristic;
 import org.elasticsearch.search.aggregations.bucket.significant.heuristics.SignificanceHeuristicBuilder;
@@ -48,7 +47,7 @@ public class SignificantTermsBuilder extends AggregationBuilder<SignificantTerms
     private int excludeFlags;
     private String[] includeTerms = null;
     private String[] excludeTerms = null;
-    private FilterBuilder filterBuilder;
+    private QueryBuilder filterBuilder;
     private SignificanceHeuristicBuilder significanceHeuristicBuilder;
 
     /**
@@ -93,7 +92,7 @@ public class SignificantTermsBuilder extends AggregationBuilder<SignificantTerms
     /**
      * Set the background filter to compare to. Defaults to the whole index.
      */
-    public SignificantTermsBuilder backgroundFilter(FilterBuilder filter) {
+    public SignificantTermsBuilder backgroundFilter(QueryBuilder filter) {
         this.filterBuilder = filter;
         return this;
     }
@@ -133,7 +132,7 @@ public class SignificantTermsBuilder extends AggregationBuilder<SignificantTerms
      */
     public SignificantTermsBuilder include(String regex, int flags) {
         if (includeTerms != null) {
-            throw new ElasticsearchIllegalArgumentException("exclude clause must be an array of strings or a regex, not both");
+            throw new IllegalArgumentException("exclude clause must be an array of strings or a regex, not both");
         }
         this.includePattern = regex;
         this.includeFlags = flags;
@@ -145,7 +144,7 @@ public class SignificantTermsBuilder extends AggregationBuilder<SignificantTerms
      */
     public SignificantTermsBuilder include(String [] terms) {
         if (includePattern != null) {
-            throw new ElasticsearchIllegalArgumentException("include clause must be an array of exact values or a regex, not both");
+            throw new IllegalArgumentException("include clause must be an array of exact values or a regex, not both");
         }
         this.includeTerms = terms;
         return this;
@@ -156,7 +155,7 @@ public class SignificantTermsBuilder extends AggregationBuilder<SignificantTerms
      */
     public SignificantTermsBuilder include(long [] terms) {
         if (includePattern != null) {
-            throw new ElasticsearchIllegalArgumentException("include clause must be an array of exact values or a regex, not both");
+            throw new IllegalArgumentException("include clause must be an array of exact values or a regex, not both");
         }
         this.includeTerms = longsArrToStringArr(terms);
         return this;
@@ -189,7 +188,7 @@ public class SignificantTermsBuilder extends AggregationBuilder<SignificantTerms
      */
     public SignificantTermsBuilder exclude(String regex, int flags) {
         if (excludeTerms != null) {
-            throw new ElasticsearchIllegalArgumentException("exclude clause must be an array of strings or a regex, not both");
+            throw new IllegalArgumentException("exclude clause must be an array of strings or a regex, not both");
         }
         this.excludePattern = regex;
         this.excludeFlags = flags;
@@ -201,7 +200,7 @@ public class SignificantTermsBuilder extends AggregationBuilder<SignificantTerms
      */
     public SignificantTermsBuilder exclude(String [] terms) {
         if (excludePattern != null) {
-            throw new ElasticsearchIllegalArgumentException("exclude clause must be an array of strings or a regex, not both");
+            throw new IllegalArgumentException("exclude clause must be an array of strings or a regex, not both");
         }
         this.excludeTerms = terms;
         return this;
@@ -213,7 +212,7 @@ public class SignificantTermsBuilder extends AggregationBuilder<SignificantTerms
      */
     public SignificantTermsBuilder exclude(long [] terms) {
         if (excludePattern != null) {
-            throw new ElasticsearchIllegalArgumentException("exclude clause must be an array of longs or a regex, not both");
+            throw new IllegalArgumentException("exclude clause must be an array of longs or a regex, not both");
         }
         this.excludeTerms = longsArrToStringArr(terms);
         return this;

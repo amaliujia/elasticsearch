@@ -19,12 +19,10 @@
 
 package org.elasticsearch.index.analysis;
 
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.Version;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.inject.Injector;
 import org.elasticsearch.common.inject.ModulesBuilder;
-import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.env.Environment;
@@ -44,7 +42,11 @@ public class PatternCaptureTokenFilterTests extends ElasticsearchTokenStreamTest
     @Test
     public void testPatternCaptureTokenFilter() throws Exception {
         Index index = new Index("test");
-        Settings settings = settingsBuilder().loadFromClasspath("org/elasticsearch/index/analysis/pattern_capture.json").put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT).build();
+        Settings settings = settingsBuilder()
+                .put("path.home", createTempDir())
+                .loadFromClasspath("org/elasticsearch/index/analysis/pattern_capture.json")
+                .put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT)
+                .build();
         Injector parentInjector = new ModulesBuilder().add(new SettingsModule(settings), new EnvironmentModule(new Environment(settings)), new IndicesAnalysisModule()).createInjector();
         Injector injector = new ModulesBuilder().add(
                 new IndexSettingsModule(index, settings),
@@ -68,7 +70,7 @@ public class PatternCaptureTokenFilterTests extends ElasticsearchTokenStreamTest
     }
     
     
-    @Test(expected=ElasticsearchIllegalArgumentException.class)
+    @Test(expected=IllegalArgumentException.class)
     public void testNoPatterns() {
         new PatternCaptureGroupTokenFilterFactory(new Index("test"), settingsBuilder().put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT).build(), "pattern_capture", settingsBuilder().put("pattern", "foobar").build());
     }

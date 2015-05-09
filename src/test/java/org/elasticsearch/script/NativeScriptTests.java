@@ -28,7 +28,7 @@ import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.env.Environment;
-import org.elasticsearch.node.settings.NodeSettingsService;
+import org.elasticsearch.env.EnvironmentModule;
 import org.elasticsearch.script.ScriptService.ScriptType;
 import org.elasticsearch.test.ElasticsearchTestCase;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -51,15 +51,17 @@ public class NativeScriptTests extends ElasticsearchTestCase {
         Settings settings = ImmutableSettings.settingsBuilder()
                 .put("script.native.my.type", MyNativeScriptFactory.class.getName())
                 .put("name", "testNativeScript")
+                .put("path.home", createTempDir())
                 .build();
         Injector injector = new ModulesBuilder().add(
-                new ThreadPoolModule(settings),
+                new EnvironmentModule(new Environment(settings)),
+                new ThreadPoolModule(new ThreadPool(settings)),
                 new SettingsModule(settings),
                 new ScriptModule(settings)).createInjector();
 
         ScriptService scriptService = injector.getInstance(ScriptService.class);
 
-        ExecutableScript executable = scriptService.executable(NativeScriptEngineService.NAME, "my", ScriptType.INLINE, ScriptContext.Standard.SEARCH, null);
+        ExecutableScript executable = scriptService.executable(new Script(NativeScriptEngineService.NAME, "my", ScriptType.INLINE, null), ScriptContext.Standard.SEARCH);
         assertThat(executable.run().toString(), equalTo("test"));
         terminate(injector.getInstance(ThreadPool.class));
     }
@@ -74,17 +76,17 @@ public class NativeScriptTests extends ElasticsearchTestCase {
             String scriptContext = randomFrom(ScriptContext.Standard.values()).getKey();
             builder.put(ScriptModes.SCRIPT_SETTINGS_PREFIX + scriptContext, randomFrom(ScriptMode.values()));
         }
-        Settings settings = builder.build();
+        Settings settings = builder.put("path.home", createTempDir()).build();
         Environment environment = new Environment(settings);
         ResourceWatcherService resourceWatcherService = new ResourceWatcherService(settings, null);
         Map<String, NativeScriptFactory> nativeScriptFactoryMap = new HashMap<>();
         nativeScriptFactoryMap.put("my", new MyNativeScriptFactory());
         Set<ScriptEngineService> scriptEngineServices = ImmutableSet.<ScriptEngineService>of(new NativeScriptEngineService(settings, nativeScriptFactoryMap));
         ScriptContextRegistry scriptContextRegistry = new ScriptContextRegistry(Lists.<ScriptContext.Plugin>newArrayList());
-        ScriptService scriptService = new ScriptService(settings, environment, scriptEngineServices, resourceWatcherService, new NodeSettingsService(settings), scriptContextRegistry);
+        ScriptService scriptService = new ScriptService(settings, environment, scriptEngineServices, resourceWatcherService, scriptContextRegistry);
 
         for (ScriptContext scriptContext : scriptContextRegistry.scriptContexts()) {
-            assertThat(scriptService.compile(NativeScriptEngineService.NAME, "my", ScriptType.INLINE, scriptContext), notNullValue());
+            assertThat(scriptService.compile(new Script(NativeScriptEngineService.NAME, "my", ScriptType.INLINE, null), scriptContext), notNullValue());
         }
     }
 

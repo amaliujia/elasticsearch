@@ -20,6 +20,7 @@
 package org.elasticsearch.percolator;
 
 import com.google.common.base.Predicate;
+
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.elasticsearch.action.get.GetResponse;
 import org.elasticsearch.action.percolate.PercolateResponse;
@@ -49,6 +50,10 @@ import static org.hamcrest.Matchers.*;
 public class TTLPercolatorTests extends ElasticsearchIntegrationTest {
 
     private static final long PURGE_INTERVAL = 200;
+
+    @Override
+    protected void beforeIndexDeletion() {
+    }
 
     @Override
     protected Settings nodeSettings(int nodeOrdinal) {

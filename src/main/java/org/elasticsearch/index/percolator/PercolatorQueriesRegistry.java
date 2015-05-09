@@ -20,9 +20,8 @@
 package org.elasticsearch.index.percolator;
 
 import org.apache.lucene.index.Term;
-import org.apache.lucene.queries.TermFilter;
-import org.apache.lucene.search.ConstantScoreQuery;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.CloseableThreadLocal;
 import org.elasticsearch.ElasticsearchException;
@@ -49,8 +48,8 @@ import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.index.query.QueryParsingException;
 import org.elasticsearch.index.settings.IndexSettings;
 import org.elasticsearch.index.shard.AbstractIndexShardComponent;
-import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.shard.IndexShard;
+import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.indices.IndicesLifecycle;
 import org.elasticsearch.percolator.PercolatorService;
 
@@ -92,7 +91,7 @@ public class PercolatorQueriesRegistry extends AbstractIndexShardComponent imple
     private CloseableThreadLocal<QueryParseContext> cache = new CloseableThreadLocal<QueryParseContext>() {
         @Override
         protected QueryParseContext initialValue() {
-            return new QueryParseContext(shardId.index(), queryParserService, true);
+            return new QueryParseContext(shardId.index(), queryParserService);
         }
     };
 
@@ -222,7 +221,7 @@ public class PercolatorQueriesRegistry extends AbstractIndexShardComponent imple
             context.setMapUnmappedFieldAsString(mapUnmappedFieldsAsString ? true : false);
             return queryParserService.parseInnerQuery(context);
         } catch (IOException e) {
-            throw new QueryParsingException(queryParserService.index(), "Failed to parse", e);
+            throw new QueryParsingException(context, "Failed to parse", e);
         } finally {
             if (type != null) {
                 QueryParseContext.setTypes(previousTypes);
@@ -279,13 +278,7 @@ public class PercolatorQueriesRegistry extends AbstractIndexShardComponent imple
             shard.refresh("percolator_load_queries");
             // Maybe add a mode load? This isn't really a write. We need write b/c state=post_recovery
             try (Engine.Searcher searcher = shard.acquireSearcher("percolator_load_queries", true)) {
-                Query query = new ConstantScoreQuery(
-                        indexCache.filter().cache(
-                                new TermFilter(new Term(TypeFieldMapper.NAME, PercolatorService.TYPE_NAME)),
-                                null,
-                                queryParserService.autoFilterCachePolicy()
-                        )
-                );
+                Query query = new TermQuery(new Term(TypeFieldMapper.NAME, PercolatorService.TYPE_NAME));
                 QueriesLoaderCollector queryCollector = new QueriesLoaderCollector(PercolatorQueriesRegistry.this, logger, mapperService, indexFieldDataService);
                 searcher.searcher().search(query, queryCollector);
                 Map<BytesRef, Query> queries = queryCollector.queries();
@@ -344,15 +337,5 @@ public class PercolatorQueriesRegistry extends AbstractIndexShardComponent imple
                 removePercolateQuery(delete.id());
             }
         }
-
-        // Updating the live percolate queries for a delete by query is tricky with the current way delete by queries
-        // are handled. It is only possible if we put a big lock around the post delete by query hook...
-
-        // If we implement delete by query, that just runs a query and generates delete operations in a bulk, then
-        // updating the live percolator is automatically supported for delete by query.
-//        @Override
-//        public void postDeleteByQuery(Engine.DeleteByQuery deleteByQuery) {
-//        }
     }
-
 }

@@ -19,6 +19,7 @@
 package org.elasticsearch.index.query;
 
 import org.apache.lucene.search.ConstantScoreQuery;
+import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.elasticsearch.Version;
 import org.elasticsearch.cluster.ClusterService;
@@ -66,7 +67,8 @@ public class TemplateQueryParserTest extends ElasticsearchTestCase {
     @Before
     public void setup() throws IOException {
         Settings settings = ImmutableSettings.settingsBuilder()
-                .put("path.conf", this.getResourcePath("config"))
+                .put("path.home", createTempDir().toString())
+                .put("path.conf", this.getDataPath("config"))
                 .put("name", getClass().getName())
                 .put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT)
                 .build();
@@ -75,7 +77,7 @@ public class TemplateQueryParserTest extends ElasticsearchTestCase {
         injector = new ModulesBuilder().add(
                 new EnvironmentModule(new Environment(settings)),
                 new SettingsModule(settings),
-                new ThreadPoolModule(settings),
+                new ThreadPoolModule(new ThreadPool(settings)),
                 new IndicesQueriesModule(),
                 new ScriptModule(settings),
                 new IndexSettingsModule(index, settings),
@@ -116,7 +118,7 @@ public class TemplateQueryParserTest extends ElasticsearchTestCase {
 
         TemplateQueryParser parser = injector.getInstance(TemplateQueryParser.class);
         Query query = parser.parse(context);
-        assertTrue("Parsing template query failed.", query instanceof ConstantScoreQuery);
+        assertTrue("Parsing template query failed.", query instanceof MatchAllDocsQuery);
     }
 
     @Test
@@ -128,6 +130,6 @@ public class TemplateQueryParserTest extends ElasticsearchTestCase {
 
         TemplateQueryParser parser = injector.getInstance(TemplateQueryParser.class);
         Query query = parser.parse(context);
-        assertTrue("Parsing template query failed.", query instanceof ConstantScoreQuery);
+        assertTrue("Parsing template query failed.", query instanceof MatchAllDocsQuery);
     }
 }

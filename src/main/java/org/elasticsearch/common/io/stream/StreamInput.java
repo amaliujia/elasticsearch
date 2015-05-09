@@ -32,6 +32,7 @@ import org.joda.time.DateTime;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ObjectInputStream;
 import java.util.*;
 
 /**
@@ -229,6 +230,14 @@ public abstract class StreamInput extends InputStream {
         return null;
     }
 
+    @Nullable
+    public Integer readOptionalVInt() throws IOException {
+        if (readBoolean()) {
+            return readVInt();
+        }
+        return null;
+    }
+
     private final CharsRefBuilder spare = new CharsRefBuilder();
 
     public String readString() throws IOException {
@@ -326,6 +335,21 @@ public abstract class StreamInput extends InputStream {
         return ret;
     }
 
+    /**
+     * Read in a list of strings. List can be empty but not {@code null}.
+     */
+    public List<String> readStringList() throws IOException {
+        int size = readVInt();
+        if (size == 0) {
+            return Collections.emptyList();
+        }
+        List<String> ret = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            ret.add(readString());
+        }
+        return ret;
+    }
+
     @Nullable
     public Map<String, Object> readMap() throws IOException {
         return (Map<String, Object>) readGenericValue();
@@ -403,6 +427,8 @@ public abstract class StreamInput extends InputStream {
                 return readFloatArray();
             case 20:
                 return readDoubleArray();
+            case 21:
+                return readBytesRef();
             default:
                 throw new IOException("Can't read unknown type [" + type + "]");
         }
@@ -416,7 +442,7 @@ public abstract class StreamInput extends InputStream {
         }
         return values;
     }
-    
+
     public long[] readLongArray() throws IOException {
         int length = readVInt();
         long[] values = new long[length];
@@ -425,7 +451,7 @@ public abstract class StreamInput extends InputStream {
         }
         return values;
     }
-    
+
     public float[] readFloatArray() throws IOException {
         int length = readVInt();
         float[] values = new float[length];
@@ -434,7 +460,7 @@ public abstract class StreamInput extends InputStream {
         }
         return values;
     }
-    
+
     public double[] readDoubleArray() throws IOException {
         int length = readVInt();
         double[] values = new double[length];
@@ -453,6 +479,15 @@ public abstract class StreamInput extends InputStream {
             return streamable;
         } else {
             return null;
+        }
+    }
+
+    public <T extends Throwable> T readThrowable() throws IOException {
+        try {
+            ObjectInputStream oin = new ObjectInputStream(this);
+            return (T) oin.readObject();
+        } catch (ClassNotFoundException e) {
+            throw new IOException("failed to deserialize exception", e);
         }
     }
 }

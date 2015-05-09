@@ -18,6 +18,7 @@
  */
 package org.elasticsearch.test;
 
+import com.carrotsearch.randomizedtesting.LifecycleScope;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthStatus;
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequestBuilder;
@@ -42,10 +43,15 @@ import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
 import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.junit.*;
+import org.junit.After;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
+import org.junit.Ignore;
 
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThanOrEqualTo;
 
 /**
  * A test that keep a singleton node started for all tests that can be used to get
@@ -87,6 +93,7 @@ public abstract class ElasticsearchSingleNodeTest extends ElasticsearchTestCase 
 
     @After
     public void tearDown() throws Exception {
+        logger.info("[{}#{}]: cleaning up after test", getTestClass().getSimpleName(), getTestName());
         super.tearDown();
         cleanup(resetNodeAfterTest());
     }
@@ -113,15 +120,16 @@ public abstract class ElasticsearchSingleNodeTest extends ElasticsearchTestCase 
 
     private static Node newNode() {
         Node build = NodeBuilder.nodeBuilder().local(true).data(true).settings(ImmutableSettings.builder()
-                .put(ClusterName.SETTING, clusterName())
-                .put("node.name", nodeName())
-                .put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, 1)
-                .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, 0)
-                .put("script.inline", "on")
-                .put("script.indexed", "on")
-                .put(EsExecutors.PROCESSORS, 1) // limit the number of threads created
-                .put("http.enabled", false)
-                .put("config.ignore_system_properties", true) // make sure we get what we set :)
+            .put(ClusterName.SETTING, InternalTestCluster.clusterName("single-node-cluster", randomLong()))
+            .put("path.home", createTempDir())
+            .put("node.name", nodeName())
+            .put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, 1)
+            .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, 0)
+            .put("script.inline", "on")
+            .put("script.indexed", "on")
+            .put(EsExecutors.PROCESSORS, 1) // limit the number of threads created
+            .put("http.enabled", false)
+            .put("config.ignore_system_properties", true) // make sure we get what we set :)
         ).build();
         build.start();
         assertThat(DiscoveryNode.localNode(build.settings()), is(true));
@@ -140,13 +148,6 @@ public abstract class ElasticsearchSingleNodeTest extends ElasticsearchTestCase 
      */
     public static String nodeName() {
         return "node_s_0";
-    }
-
-    /**
-     * Returns the name of the cluster used for the single test node.
-     */
-    public static String clusterName() {
-        return InternalTestCluster.clusterName("single-node", Integer.toString(CHILD_JVM_ID), randomLong());
     }
 
     /**
@@ -230,7 +231,7 @@ public abstract class ElasticsearchSingleNodeTest extends ElasticsearchTestCase 
      * It is useful to ensure that all action on the cluster have finished and all shards that were currently relocating
      * are now allocated and started.
      */
-    public ClusterHealthStatus  ensureGreen(String... indices) {
+    public ClusterHealthStatus ensureGreen(String... indices) {
         return ensureGreen(TimeValue.timeValueSeconds(30), indices);
     }
 

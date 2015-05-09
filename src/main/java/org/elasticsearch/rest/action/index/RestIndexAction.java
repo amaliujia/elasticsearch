@@ -19,7 +19,6 @@
 
 package org.elasticsearch.rest.action.index;
 
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.action.ActionWriteResponse;
 import org.elasticsearch.action.WriteConsistencyLevel;
 import org.elasticsearch.action.index.IndexRequest;
@@ -71,7 +70,6 @@ public class RestIndexAction extends BaseRestHandler {
     @Override
     public void handleRequest(final RestRequest request, final RestChannel channel, final Client client) {
         IndexRequest indexRequest = new IndexRequest(request.param("index"), request.param("type"), request.param("id"));
-        indexRequest.listenerThreaded(false);
         indexRequest.operationThreaded(true);
         indexRequest.routing(request.param("routing"));
         indexRequest.parent(request.param("parent")); // order is important, set it after routing, so it will set the routing
@@ -88,7 +86,7 @@ public class RestIndexAction extends BaseRestHandler {
         if (sOpType != null) {
             try {
                 indexRequest.opType(IndexRequest.OpType.fromString(sOpType));
-            } catch (ElasticsearchIllegalArgumentException eia){
+            } catch (IllegalArgumentException eia){
                 try {
                     XContentBuilder builder = channel.newBuilder();
                     channel.sendResponse(new BytesRestResponse(BAD_REQUEST, builder.startObject().field("error", eia.getMessage()).endObject()));

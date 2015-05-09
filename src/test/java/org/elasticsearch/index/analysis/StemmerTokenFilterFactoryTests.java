@@ -26,8 +26,8 @@ import org.apache.lucene.analysis.snowball.SnowballFilter;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.test.ElasticsearchTestCase;
 import org.elasticsearch.test.ElasticsearchTokenStreamTestCase;
+import org.elasticsearch.test.VersionUtils;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -47,13 +47,14 @@ public class StemmerTokenFilterFactoryTests extends ElasticsearchTokenStreamTest
         int iters = scaledRandomIntBetween(20, 100);
         for (int i = 0; i < iters; i++) {
 
-            Version v = ElasticsearchTestCase.randomVersion(random());
+            Version v = VersionUtils.randomVersion(random());
             Settings settings = ImmutableSettings.settingsBuilder()
                     .put("index.analysis.filter.my_english.type", "stemmer")
                     .put("index.analysis.filter.my_english.language", "english")
                     .put("index.analysis.analyzer.my_english.tokenizer","whitespace")
                     .put("index.analysis.analyzer.my_english.filter","my_english")
                     .put(SETTING_VERSION_CREATED,v)
+                    .put("path.home", createTempDir().toString())
                     .build();
 
             AnalysisService analysisService = AnalysisTestsHelper.createAnalysisServiceFromSettings(settings);
@@ -80,13 +81,14 @@ public class StemmerTokenFilterFactoryTests extends ElasticsearchTokenStreamTest
         int iters = scaledRandomIntBetween(20, 100);
         for (int i = 0; i < iters; i++) {
 
-            Version v = ElasticsearchTestCase.randomVersion(random());
+            Version v = VersionUtils.randomVersion(random());
             Settings settings = ImmutableSettings.settingsBuilder()
                     .put("index.analysis.filter.my_porter2.type", "stemmer")
                     .put("index.analysis.filter.my_porter2.language", "porter2")
                     .put("index.analysis.analyzer.my_porter2.tokenizer","whitespace")
                     .put("index.analysis.analyzer.my_porter2.filter","my_porter2")
                     .put(SETTING_VERSION_CREATED,v)
+                    .put("path.home", createTempDir().toString())
                     .build();
 
             AnalysisService analysisService = AnalysisTestsHelper.createAnalysisServiceFromSettings(settings);

@@ -34,7 +34,10 @@ import org.junit.Test;
 import static org.elasticsearch.common.settings.ImmutableSettings.settingsBuilder;
 import static org.elasticsearch.node.NodeBuilder.nodeBuilder;
 import static org.elasticsearch.test.ElasticsearchIntegrationTest.Scope;
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.startsWith;
 
 @ClusterScope(scope = Scope.TEST, numDataNodes = 0, transportClientRatio = 1.0)
 public class TransportClientTests extends ElasticsearchIntegrationTest {
@@ -54,9 +57,9 @@ public class TransportClientTests extends ElasticsearchIntegrationTest {
         TransportClientNodesService nodeService = client.nodeService();
         Node node = nodeBuilder().data(false).settings(ImmutableSettings.builder()
                 .put(internalCluster().getDefaultSettings())
+                .put("path.home", createTempDir())
                 .put("node.name", "testNodeVersionIsUpdated")
                 .put("http.enabled", false)
-                .put("index.store.type", "ram")
                 .put("config.ignore_system_properties", true) // make sure we get what we set :)
                 .build()).clusterName("foobar").build();
         node.start();
@@ -91,7 +94,8 @@ public class TransportClientTests extends ElasticsearchIntegrationTest {
 
     @Test
     public void testThatTransportClientSettingCannotBeChanged() {
-        try (TransportClient client = new TransportClient(settingsBuilder().put(Client.CLIENT_TYPE_SETTING, "anything"))) {
+        Settings baseSettings = settingsBuilder().put(Client.CLIENT_TYPE_SETTING, "anything").put("path.home", createTempDir()).build();
+        try (TransportClient client = TransportClient.builder().settings(baseSettings).build()) {
             Settings settings = client.injector.getInstance(Settings.class);
             assertThat(settings.get(Client.CLIENT_TYPE_SETTING), is("transport"));
         }

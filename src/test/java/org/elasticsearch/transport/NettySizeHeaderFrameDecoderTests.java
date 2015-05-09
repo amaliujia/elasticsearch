@@ -58,10 +58,10 @@ public class NettySizeHeaderFrameDecoderTests extends ElasticsearchTestCase {
 
     @Before
     public void startThreadPool() {
-        threadPool = new ThreadPool(settings, new NodeSettingsService(settings));
-
+        threadPool = new ThreadPool(settings);
+        threadPool.setNodeSettingsService(new NodeSettingsService(settings));
         NetworkService networkService = new NetworkService(settings);
-        BigArrays bigArrays = new MockBigArrays(settings, new MockPageCacheRecycler(settings, threadPool), new NoneCircuitBreakerService());
+        BigArrays bigArrays = new MockBigArrays(new MockPageCacheRecycler(settings, threadPool), new NoneCircuitBreakerService());
         nettyTransport = new NettyTransport(settings, threadPool, networkService, bigArrays, Version.CURRENT);
         nettyTransport.start();
         TransportService transportService = new TransportService(nettyTransport, threadPool);

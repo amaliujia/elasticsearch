@@ -249,7 +249,7 @@ public class RestNodesAction extends AbstractCatAction {
             table.addCell(jvmInfo == null ? null : jvmInfo.version());
             table.addCell(fsStats == null ? null : fsStats.getTotal().getAvailable());
             table.addCell(jvmStats == null ? null : jvmStats.getMem().getHeapUsed());
-            table.addCell(jvmStats == null ? null : jvmStats.getMem().getHeapUsedPrecent());
+            table.addCell(jvmStats == null ? null : jvmStats.getMem().getHeapUsedPercent());
             table.addCell(jvmInfo == null ? null : jvmInfo.getMem().getHeapMax());
             table.addCell(osStats == null ? null : osStats.getMem() == null ? null : osStats.getMem().used());
             table.addCell(osStats == null ? null : osStats.getMem() == null ? null : osStats.getMem().usedPercent());
@@ -260,7 +260,7 @@ public class RestNodesAction extends AbstractCatAction {
             table.addCell(processInfo == null ? null : processInfo.getMaxFileDescriptors());
 
             table.addCell(osStats == null ? null : osStats.getLoadAverage().length < 1 ? null : String.format(Locale.ROOT, "%.2f", osStats.getLoadAverage()[0]));
-            table.addCell(jvmStats == null ? null : jvmStats.uptime());
+            table.addCell(jvmStats == null ? null : jvmStats.getUptime());
             table.addCell(node.clientNode() ? "c" : node.dataNode() ? "d" : "-");
             table.addCell(masterId == null ? "x" : masterId.equals(node.id()) ? "*" : node.masterNode() ? "m" : "-");
             table.addCell(node.name());
@@ -358,9 +358,9 @@ public class RestNodesAction extends AbstractCatAction {
      * Calculate the percentage of {@code used} from the {@code max} number.
      * @param used The currently used number.
      * @param max The maximum number.
-     * @return 0 if {@code max} is 0. Otherwise 100 * {@code used} / {@code max}.
+     * @return 0 if {@code max} is <= 0. Otherwise 100 * {@code used} / {@code max}.
      */
     private short calculatePercentage(long used, long max) {
-        return max == 0 ? 0 : (short)((100d * used) / max);
+        return max <= 0 ? 0 : (short)((100d * used) / max);
     }
 }

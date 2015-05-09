@@ -31,7 +31,7 @@ import org.junit.Test;
 import java.util.List;
 
 import static com.google.common.collect.Lists.newArrayList;
-import static org.elasticsearch.index.query.FilterBuilders.scriptFilter;
+import static org.elasticsearch.index.query.QueryBuilders.scriptQuery;
 import static org.elasticsearch.index.query.QueryBuilders.constantScoreQuery;
 import static org.elasticsearch.index.query.QueryBuilders.functionScoreQuery;
 import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
@@ -73,28 +73,28 @@ public class GroovyScriptTests extends ElasticsearchIntegrationTest {
         }
         indexRandom(true, false, reqs);
         try {
-            client().prepareSearch("test").setQuery(constantScoreQuery(scriptFilter("1 == not_found").lang(GroovyScriptEngineService.NAME))).get();
+            client().prepareSearch("test").setQuery(constantScoreQuery(scriptQuery("1 == not_found").lang(GroovyScriptEngineService.NAME))).get();
             fail("should have thrown an exception");
         } catch (SearchPhaseExecutionException e) {
-            assertThat(ExceptionsHelper.detailedMessage(e) + "should not contained NotSerializableTransportException",
-                    ExceptionsHelper.detailedMessage(e).contains("NotSerializableTransportException"), equalTo(false));
-            assertThat(ExceptionsHelper.detailedMessage(e) + "should have contained GroovyScriptExecutionException",
-                    ExceptionsHelper.detailedMessage(e).contains("GroovyScriptExecutionException"), equalTo(true));
-            assertThat(ExceptionsHelper.detailedMessage(e) + "should have contained not_found",
-                    ExceptionsHelper.detailedMessage(e).contains("No such property: not_found"), equalTo(true));
+            assertThat(e.toString()+ "should not contained NotSerializableTransportException",
+                    e.toString().contains("NotSerializableTransportException"), equalTo(false));
+            assertThat(e.toString()+ "should have contained GroovyScriptExecutionException",
+                    e.toString().contains("GroovyScriptExecutionException"), equalTo(true));
+            assertThat(e.toString()+ "should have contained not_found",
+                    e.toString().contains("No such property: not_found"), equalTo(true));
         }
 
         try {
             client().prepareSearch("test").setQuery(constantScoreQuery(
-                    scriptFilter("assert false").lang("groovy"))).get();
+                    scriptQuery("assert false").lang("groovy"))).get();
             fail("should have thrown an exception");
         } catch (SearchPhaseExecutionException e) {
-            assertThat(ExceptionsHelper.detailedMessage(e) + "should not contained NotSerializableTransportException",
-                    ExceptionsHelper.detailedMessage(e).contains("NotSerializableTransportException"), equalTo(false));
-            assertThat(ExceptionsHelper.detailedMessage(e) + "should have contained GroovyScriptExecutionException",
-                    ExceptionsHelper.detailedMessage(e).contains("GroovyScriptExecutionException"), equalTo(true));
-            assertThat(ExceptionsHelper.detailedMessage(e) + "should have contained an assert error",
-                    ExceptionsHelper.detailedMessage(e).contains("PowerAssertionError[assert false"), equalTo(true));
+            assertThat(e.toString()+ "should not contained NotSerializableTransportException",
+                    e.toString().contains("NotSerializableTransportException"), equalTo(false));
+            assertThat(e.toString()+ "should have contained GroovyScriptExecutionException",
+                    e.toString().contains("GroovyScriptExecutionException"), equalTo(true));
+            assertThat(e.toString()+ "should have contained an assert error",
+                    e.toString().contains("PowerAssertionError[assert false"), equalTo(true));
         }
     }
 

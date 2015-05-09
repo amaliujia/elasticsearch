@@ -19,7 +19,6 @@
 
 package org.elasticsearch.index.query;
 
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.action.get.MultiGetRequest;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.bytes.BytesReference;
@@ -260,14 +259,6 @@ public class MoreLikeThisQueryBuilder extends BaseQueryBuilder implements Boosta
     }
 
     /**
-     * The percentage of terms to match. Defaults to <tt>0.3</tt>.
-     */
-    @Deprecated
-    public MoreLikeThisQueryBuilder percentTermsToMatch(float percentTermsToMatch) {
-        return minimumShouldMatch(Math.round(percentTermsToMatch * 100) + "%");
-    }
-
-    /**
      * The frequency below which terms will be ignored in the source doc. The default
      * frequency is <tt>2</tt>.
      */
@@ -383,7 +374,7 @@ public class MoreLikeThisQueryBuilder extends BaseQueryBuilder implements Boosta
             builder.endArray();
         }
         if (this.docs.isEmpty()) {
-            throw new ElasticsearchIllegalArgumentException("more_like_this requires '" + likeFieldName + "' to be provided");
+            throw new IllegalArgumentException("more_like_this requires '" + likeFieldName + "' to be provided");
         } else {
             builder.field(likeFieldName, docs);
         }

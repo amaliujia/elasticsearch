@@ -19,18 +19,20 @@
 
 package org.elasticsearch.action.delete;
 
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.RoutingMissingException;
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequest;
 import org.elasticsearch.action.admin.indices.create.CreateIndexResponse;
 import org.elasticsearch.action.admin.indices.create.TransportCreateIndexAction;
+import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.AutoCreateIndex;
 import org.elasticsearch.action.support.replication.TransportShardReplicationOperationAction;
 import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.action.index.MappingUpdatedAction;
 import org.elasticsearch.cluster.action.shard.ShardStateAction;
 import org.elasticsearch.cluster.metadata.MappingMetaData;
 import org.elasticsearch.cluster.routing.ShardIterator;
@@ -40,10 +42,14 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.shard.IndexShard;
+import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.indices.IndexAlreadyExistsException;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
+
+import java.io.IOException;
 
 /**
  * Performs the delete operation.
@@ -51,21 +57,18 @@ import org.elasticsearch.transport.TransportService;
 public class TransportDeleteAction extends TransportShardReplicationOperationAction<DeleteRequest, DeleteRequest, DeleteResponse> {
 
     private final AutoCreateIndex autoCreateIndex;
-
     private final TransportCreateIndexAction createIndexAction;
 
     @Inject
     public TransportDeleteAction(Settings settings, TransportService transportService, ClusterService clusterService,
                                  IndicesService indicesService, ThreadPool threadPool, ShardStateAction shardStateAction,
-                                 TransportCreateIndexAction createIndexAction, ActionFilters actionFilters) {
-        super(settings, DeleteAction.NAME, transportService, clusterService, indicesService, threadPool, shardStateAction, actionFilters);
+                                 TransportCreateIndexAction createIndexAction, ActionFilters actionFilters,
+                                 MappingUpdatedAction mappingUpdatedAction) {
+        super(settings, DeleteAction.NAME, transportService, clusterService, indicesService, threadPool, shardStateAction,
+                mappingUpdatedAction, actionFilters,
+                DeleteRequest.class, DeleteRequest.class, ThreadPool.Names.INDEX);
         this.createIndexAction = createIndexAction;
         this.autoCreateIndex = new AutoCreateIndex(settings);
-    }
-
-    @Override
-    protected String executor() {
-        return ThreadPool.Names.INDEX;
     }
 
     @Override
@@ -107,7 +110,7 @@ public class TransportDeleteAction extends TransportShardReplicationOperationAct
                 if (request.request().routing() == null) {
                     if (request.request().versionType() != VersionType.INTERNAL) {
                         // TODO: implement this feature
-                        throw new ElasticsearchIllegalArgumentException("routing value is required for deleting documents of type [" + request.request().type()
+                        throw new IllegalArgumentException("routing value is required for deleting documents of type [" + request.request().type()
                                 + "] while using version_type [" + request.request().versionType() + "]");
                     }
                     throw new RoutingMissingException(request.concreteIndex(), request.request().type(), request.request().id());
@@ -123,16 +126,6 @@ public class TransportDeleteAction extends TransportShardReplicationOperationAct
     @Override
     protected boolean checkWriteConsistency() {
         return true;
-    }
-
-    @Override
-    protected DeleteRequest newRequestInstance() {
-        return new DeleteRequest();
-    }
-
-    @Override
-    protected DeleteRequest newReplicaRequestInstance() {
-        return newRequestInstance();
     }
 
     @Override
@@ -152,38 +145,38 @@ public class TransportDeleteAction extends TransportShardReplicationOperationAct
 
         assert request.versionType().validateVersionForWrites(request.version());
 
-        if (request.refresh()) {
-            try {
-                indexShard.refresh("refresh_flag_delete");
-            } catch (Exception e) {
-                // ignore
-            }
-        }
+        processAfter(request, indexShard, delete.getTranslogLocation());
 
         DeleteResponse response = new DeleteResponse(shardRequest.shardId.getIndex(), request.type(), request.id(), delete.version(), delete.found());
         return new Tuple<>(response, shardRequest.request);
     }
 
     @Override
-    protected void shardOperationOnReplica(ReplicaOperationRequest shardRequest) {
-        DeleteRequest request = shardRequest.request;
-        IndexShard indexShard = indicesService.indexServiceSafe(shardRequest.shardId.getIndex()).shardSafe(shardRequest.shardId.id());
+    protected void shardOperationOnReplica(ShardId shardId, DeleteRequest request) {
+        IndexShard indexShard = indicesService.indexServiceSafe(shardId.getIndex()).shardSafe(shardId.id());
         Engine.Delete delete = indexShard.prepareDelete(request.type(), request.id(), request.version(), request.versionType(), Engine.Operation.Origin.REPLICA);
 
         indexShard.delete(delete);
-
-        if (request.refresh()) {
-            try {
-                indexShard.refresh("refresh_flag_delete");
-            } catch (Exception e) {
-                // ignore
-            }
-        }
+        processAfter(request, indexShard, delete.getTranslogLocation());
     }
 
     @Override
     protected ShardIterator shards(ClusterState clusterState, InternalRequest request) {
         return clusterService.operationRouting()
                 .deleteShards(clusterService.state(), request.concreteIndex(), request.request().type(), request.request().id(), request.request().routing());
+    }
+
+    private void processAfter(DeleteRequest request, IndexShard indexShard, Translog.Location location) {
+        if (request.refresh()) {
+            try {
+                indexShard.refresh("refresh_flag_delete");
+            } catch (Throwable e) {
+                // ignore
+            }
+        }
+
+        if (indexShard.getTranslogDurability() == Translog.Durabilty.REQUEST && location != null) {
+            indexShard.sync(location);
+        }
     }
 }

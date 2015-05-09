@@ -19,19 +19,25 @@
 
 package org.elasticsearch.index.engine;
 
-import org.apache.lucene.index.*;
-import org.apache.lucene.search.Filter;
+import com.google.common.base.Preconditions;
+
+import org.apache.lucene.index.FilterLeafReader;
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.LeafReader;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.SegmentCommitInfo;
+import org.apache.lucene.index.SegmentInfos;
+import org.apache.lucene.index.SegmentReader;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.SearcherManager;
 import org.apache.lucene.search.join.BitDocIdSetFilter;
 import org.apache.lucene.util.Accountable;
 import org.apache.lucene.util.Accountables;
-import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.ElasticsearchIllegalStateException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.Preconditions;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.lease.Releasables;
@@ -47,13 +53,18 @@ import org.elasticsearch.index.mapper.DocumentMapper;
 import org.elasticsearch.index.mapper.ParseContext.Document;
 import org.elasticsearch.index.mapper.ParsedDocument;
 import org.elasticsearch.index.mapper.Uid;
+import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.index.translog.Translog;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Condition;
@@ -83,7 +94,6 @@ public abstract class Engine implements Closeable {
     protected Engine(EngineConfig engineConfig) {
         Preconditions.checkNotNull(engineConfig.getStore(), "Store must be provided to the engine");
         Preconditions.checkNotNull(engineConfig.getDeletionPolicy(), "Snapshot deletion policy must be provided to the engine");
-        Preconditions.checkNotNull(engineConfig.getTranslog(), "Translog must be provided to the engine");
 
         this.engineConfig = engineConfig;
         this.shardId = engineConfig.getShardId();
@@ -104,7 +114,7 @@ public abstract class Engine implements Closeable {
 
     /**
      * Tries to extract a segment reader from the given index reader.
-     * If no SegmentReader can be extracted an {@link org.elasticsearch.ElasticsearchIllegalStateException} is thrown.
+     * If no SegmentReader can be extracted an {@link IllegalStateException} is thrown.
      */
     protected static SegmentReader segmentReader(LeafReader reader) {
         if (reader instanceof SegmentReader) {
@@ -114,7 +124,7 @@ public abstract class Engine implements Closeable {
             return segmentReader(FilterLeafReader.unwrap(fReader));
         }
         // hard fail - we can't get a SegmentReader
-        throw new ElasticsearchIllegalStateException("Can not extract segment reader from given index reader [" + reader + "]");
+        throw new IllegalStateException("Can not extract segment reader from given index reader [" + reader + "]");
     }
 
     /**
@@ -136,6 +146,8 @@ public abstract class Engine implements Closeable {
     public final EngineConfig config() {
         return engineConfig;
     }
+
+    protected abstract SegmentInfos getLastCommittedSegmentInfos();
 
     /** A throttling class that can be activated, causing the
      * {@code acquireThrottle} method to block on a lock when throttling
@@ -198,10 +210,12 @@ public abstract class Engine implements Closeable {
 
     public abstract void create(Create create) throws EngineException;
 
-    public abstract void index(Index index) throws EngineException;
+    public abstract boolean index(Index index) throws EngineException;
 
     public abstract void delete(Delete delete) throws EngineException;
 
+    /** @deprecated This was removed, but we keep this API so translog can replay any DBQs on upgrade. */
+    @Deprecated
     public abstract void delete(DeleteByQuery delete) throws EngineException;
 
     final protected GetResult getFromSearcher(Get get) throws EngineException {
@@ -275,11 +289,21 @@ public abstract class Engine implements Closeable {
         }
     }
 
+    /** returns the translog for this engine */
+    public abstract Translog getTranslog();
+
     protected void ensureOpen() {
         if (isClosed.get()) {
             throw new EngineClosedException(shardId, failedEngine);
         }
     }
+
+    /** get commits stats for the last commit */
+    public CommitStats commitStats() {
+        return new CommitStats(getLastCommittedSegmentInfos());
+    }
+
+
 
     /**
      * Global stats on segments.
@@ -430,21 +454,21 @@ public abstract class Engine implements Closeable {
      * Optimizes to 1 segment
      */
     public void forceMerge(boolean flush) {
-        forceMerge(flush, 1, false, false);
+        forceMerge(flush, 1, false, false, false);
     }
 
     /**
      * Triggers a forced merge on this engine
      */
-    public abstract void forceMerge(boolean flush, int maxNumSegments, boolean onlyExpungeDeletes, boolean upgrade) throws EngineException;
+    public abstract void forceMerge(boolean flush, int maxNumSegments, boolean onlyExpungeDeletes, boolean upgrade, boolean upgradeOnlyAncientSegments) throws EngineException;
 
     /**
-     * Snapshots the index and returns a handle to it. Will always try and "commit" the
+     * Snapshots the index and returns a handle to it. If needed will try and "commit" the
      * lucene index to make sure we have a "fresh" copy of the files to snapshot.
+     *
+     * @param flushFirst indicates whether the engine should flush before returning the snapshot
      */
-    public abstract SnapshotIndexCommit snapshotIndex() throws EngineException;
-
-    public abstract void recover(RecoveryHandler recoveryHandler) throws EngineException;
+    public abstract SnapshotIndexCommit snapshotIndex(boolean flushFirst) throws EngineException;
 
     /** fail engine due to some error. the engine will also be closed. */
     public void failEngine(String reason, Throwable failure) {
@@ -528,11 +552,11 @@ public abstract class Engine implements Closeable {
      */
     public static interface RecoveryHandler {
 
-        void phase1(SnapshotIndexCommit snapshot) throws ElasticsearchException;
+        void phase1(SnapshotIndexCommit snapshot);
 
-        void phase2(Translog.Snapshot snapshot) throws ElasticsearchException;
+        void phase2(Translog.Snapshot snapshot);
 
-        void phase3(Translog.Snapshot snapshot) throws ElasticsearchException;
+        void phase3(Translog.Snapshot snapshot);
     }
 
     public static class Searcher implements Releasable {
@@ -561,7 +585,7 @@ public abstract class Engine implements Closeable {
         }
 
         @Override
-        public void close() throws ElasticsearchException {
+        public void close() {
             // Nothing to close here
         }
     }
@@ -593,6 +617,7 @@ public abstract class Engine implements Closeable {
         private final VersionType versionType;
         private final Origin origin;
         private final boolean canHaveDuplicates;
+        private Translog.Location location;
 
         private final long startTime;
         private long endTime;
@@ -658,6 +683,14 @@ public abstract class Engine implements Closeable {
             this.doc.version().setLongValue(version);
         }
 
+        public void setTranslogLocation(Translog.Location location) {
+            this.location = location;
+        }
+
+        public Translog.Location getTranslogLocation() {
+            return this.location;
+        }
+
         public VersionType versionType() {
             return this.versionType;
         }
@@ -695,6 +728,12 @@ public abstract class Engine implements Closeable {
         public long endTime() {
             return this.endTime;
         }
+
+        /**
+         * Execute this operation against the provided {@link IndexShard} and
+         * return whether the document was created.
+         */
+        public abstract boolean execute(IndexShard shard);
     }
 
     public static final class Create extends IndexingOperation {
@@ -723,10 +762,15 @@ public abstract class Engine implements Closeable {
         public boolean autoGeneratedId() {
             return this.autoGeneratedId;
         }
+
+        @Override
+        public boolean execute(IndexShard shard) {
+            shard.create(this);
+            return true;
+        }
     }
 
     public static final class Index extends IndexingOperation {
-        private boolean created;
 
         public Index(DocumentMapper docMapper, Term uid, ParsedDocument doc, long version, VersionType versionType, Origin origin, long startTime, boolean canHaveDuplicates) {
             super(docMapper, uid, doc, version, versionType, origin, startTime, canHaveDuplicates);
@@ -745,15 +789,9 @@ public abstract class Engine implements Closeable {
             return Type.INDEX;
         }
 
-        /**
-         * @return true if object was created
-         */
-        public boolean created() {
-            return created;
-        }
-
-        public void created(boolean created) {
-            this.created = created;
+        @Override
+        public boolean execute(IndexShard shard) {
+            return shard.index(this);
         }
     }
 
@@ -768,6 +806,7 @@ public abstract class Engine implements Closeable {
 
         private final long startTime;
         private long endTime;
+        private Translog.Location location;
 
         public Delete(String type, String id, Term uid, long version, VersionType versionType, Origin origin, long startTime, boolean found) {
             this.type = type;
@@ -847,13 +886,21 @@ public abstract class Engine implements Closeable {
         public long endTime() {
             return this.endTime;
         }
+
+        public void setTranslogLocation(Translog.Location location) {
+            this.location = location;
+        }
+
+        public Translog.Location getTranslogLocation() {
+            return this.location;
+        }
     }
 
     public static class DeleteByQuery {
         private final Query query;
         private final BytesReference source;
         private final String[] filteringAliases;
-        private final Filter aliasFilter;
+        private final Query aliasFilter;
         private final String[] types;
         private final BitDocIdSetFilter parentFilter;
         private final Operation.Origin origin;
@@ -861,7 +908,7 @@ public abstract class Engine implements Closeable {
         private final long startTime;
         private long endTime;
 
-        public DeleteByQuery(Query query, BytesReference source, @Nullable String[] filteringAliases, @Nullable Filter aliasFilter, BitDocIdSetFilter parentFilter, Operation.Origin origin, long startTime, String... types) {
+        public DeleteByQuery(Query query, BytesReference source, @Nullable String[] filteringAliases, @Nullable Query aliasFilter, BitDocIdSetFilter parentFilter, Operation.Origin origin, long startTime, String... types) {
             this.query = query;
             this.source = source;
             this.types = types;
@@ -888,7 +935,7 @@ public abstract class Engine implements Closeable {
             return filteringAliases;
         }
 
-        public Filter aliasFilter() {
+        public Query aliasFilter() {
             return aliasFilter;
         }
 
@@ -1028,12 +1075,19 @@ public abstract class Engine implements Closeable {
 
     protected abstract SearcherManager getSearcherManager();
 
-    protected abstract void closeNoLock(String reason) throws ElasticsearchException;
+    /**
+     * Method to close the engine while the write lock is held.
+     */
+    protected abstract void closeNoLock(String reason);
 
+    /**
+     * Flush the engine (committing segments to disk and truncating the
+     * translog) and close it.
+     */
     public void flushAndClose() throws IOException {
         if (isClosed.get() == false) {
             logger.trace("flushAndClose now acquire writeLock");
-            try (ReleasableLock _ = writeLock.acquire()) {
+            try (ReleasableLock lock = writeLock.acquire()) {
                 logger.trace("flushAndClose now acquired writeLock");
                 try {
                     logger.debug("flushing shard on close - this might take some time to sync files to disk");
@@ -1055,7 +1109,7 @@ public abstract class Engine implements Closeable {
     public void close() throws IOException {
         if (isClosed.get() == false) { // don't acquire the write lock if we are already closed
             logger.debug("close now acquiring writeLock");
-            try (ReleasableLock _ = writeLock.acquire()) {
+            try (ReleasableLock lock = writeLock.acquire()) {
                 logger.debug("close acquired writeLock");
                 closeNoLock("api");
             }

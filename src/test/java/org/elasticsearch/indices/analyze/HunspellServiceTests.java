@@ -45,7 +45,7 @@ public class HunspellServiceTests extends ElasticsearchIntegrationTest {
     @Test
     public void testLocaleDirectoryWithNodeLevelConfig() throws Exception {
         Settings settings = ImmutableSettings.settingsBuilder()
-                .put("path.conf", getResourcePath("/indices/analyze/conf_dir"))
+                .put("path.conf", getDataPath("/indices/analyze/conf_dir"))
                 .put(HUNSPELL_LAZY_LOAD, randomBoolean())
                 .put(HUNSPELL_IGNORE_CASE, true)
                 .build();
@@ -59,7 +59,7 @@ public class HunspellServiceTests extends ElasticsearchIntegrationTest {
     @Test
     public void testLocaleDirectoryWithLocaleSpecificConfig() throws Exception {
         Settings settings = ImmutableSettings.settingsBuilder()
-                .put("path.conf", getResourcePath("/indices/analyze/conf_dir"))
+                .put("path.conf", getDataPath("/indices/analyze/conf_dir"))
                 .put(HUNSPELL_LAZY_LOAD, randomBoolean())
                 .put(HUNSPELL_IGNORE_CASE, true)
                 .put("indices.analysis.hunspell.dictionary.en_US.strict_affix_parsing", false)
@@ -80,20 +80,9 @@ public class HunspellServiceTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testCustomizeLocaleDirectory() throws Exception {
-        Settings settings = ImmutableSettings.settingsBuilder()
-                .put(HUNSPELL_LOCATION, getResourcePath("/indices/analyze/conf_dir/hunspell"))
-                .build();
-
-        internalCluster().startNode(settings);
-        Dictionary dictionary = internalCluster().getInstance(HunspellService.class).getDictionary("en_US");
-        assertThat(dictionary, notNullValue());
-    }
-
-    @Test
     public void testDicWithNoAff() throws Exception {
         Settings settings = ImmutableSettings.settingsBuilder()
-                .put("path.conf", getResourcePath("/indices/analyze/no_aff_conf_dir"))
+                .put("path.conf", getDataPath("/indices/analyze/no_aff_conf_dir"))
                 .put(HUNSPELL_LAZY_LOAD, randomBoolean())
                 .build();
 
@@ -112,7 +101,7 @@ public class HunspellServiceTests extends ElasticsearchIntegrationTest {
     @Test
     public void testDicWithTwoAffs() throws Exception {
         Settings settings = ImmutableSettings.settingsBuilder()
-                .put("path.conf", getResourcePath("/indices/analyze/two_aff_conf_dir"))
+                .put("path.conf", getDataPath("/indices/analyze/two_aff_conf_dir"))
                 .put(HUNSPELL_LAZY_LOAD, randomBoolean())
                 .build();
 

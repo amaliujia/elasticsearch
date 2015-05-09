@@ -21,7 +21,6 @@ package org.elasticsearch.bwcompat;
 import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 import org.apache.lucene.index.Fields;
 import org.apache.lucene.util.English;
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthStatus;
@@ -31,8 +30,6 @@ import org.elasticsearch.action.admin.indices.settings.get.GetSettingsResponse;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.elasticsearch.action.count.CountResponse;
 import org.elasticsearch.action.delete.DeleteResponse;
-import org.elasticsearch.action.deletebyquery.DeleteByQueryResponse;
-import org.elasticsearch.action.deletebyquery.IndexDeleteByQueryResponse;
 import org.elasticsearch.action.explain.ExplainResponse;
 import org.elasticsearch.action.get.*;
 import org.elasticsearch.action.index.IndexRequestBuilder;
@@ -72,8 +69,8 @@ import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.index.query.FilterBuilders.existsFilter;
-import static org.elasticsearch.index.query.FilterBuilders.missingFilter;
+import static org.elasticsearch.index.query.QueryBuilders.existsQuery;
+import static org.elasticsearch.index.query.QueryBuilders.missingQuery;
 import static org.elasticsearch.index.query.QueryBuilders.*;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.*;
 import static org.hamcrest.Matchers.*;
@@ -395,7 +392,7 @@ public class BasicBackwardsCompatibilityTest extends ElasticsearchBackwardsCompa
                     setSettings(ImmutableSettings.builder().put("index.routing.allocation.exclude._name", backwardsCluster().newNodePattern()).put(indexSettings()))
                     .addMapping("type", mapping));
         } catch (MapperParsingException ex) {
-            assertThat(ex.getCause(), instanceOf(ElasticsearchIllegalArgumentException.class));
+            assertThat(ex.getCause(), instanceOf(IllegalArgumentException.class));
             assertThat(ExceptionsHelper.detailedMessage(ex).contains("type=_field_names is not supported on indices created before version 1.3.0"), equalTo(true));
         }
 
@@ -420,47 +417,47 @@ public class BasicBackwardsCompatibilityTest extends ElasticsearchBackwardsCompa
                     client().prepareIndex(indexName, "type1", "3").setSource(jsonBuilder().startObject().startObject("obj2").field("obj2_val", "1").endObject().field("y1", "y_1").field("field2", "value2_3").endObject()),
                     client().prepareIndex(indexName, "type1", "4").setSource(jsonBuilder().startObject().startObject("obj2").field("obj2_val", "1").endObject().field("y2", "y_2").field("field3", "value3_4").endObject()));
 
-            CountResponse countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsFilter("field1"))).get();
+            CountResponse countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsQuery("field1"))).get();
             assertHitCount(countResponse, 2l);
 
-            countResponse = client().prepareCount().setQuery(constantScoreQuery(existsFilter("field1"))).get();
+            countResponse = client().prepareCount().setQuery(constantScoreQuery(existsQuery("field1"))).get();
             assertHitCount(countResponse, 2l);
 
             countResponse = client().prepareCount().setQuery(queryStringQuery("_exists_:field1")).get();
             assertHitCount(countResponse, 2l);
 
-            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsFilter("field2"))).get();
+            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsQuery("field2"))).get();
             assertHitCount(countResponse, 2l);
 
-            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsFilter("field3"))).get();
+            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsQuery("field3"))).get();
             assertHitCount(countResponse, 1l);
 
             // wildcard check
-            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsFilter("x*"))).get();
+            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsQuery("x*"))).get();
             assertHitCount(countResponse, 2l);
 
             // object check
-            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsFilter("obj1"))).get();
+            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), existsQuery("obj1"))).get();
             assertHitCount(countResponse, 2l);
 
-            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), missingFilter("field1"))).get();
+            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), missingQuery("field1"))).get();
             assertHitCount(countResponse, 2l);
 
-            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), missingFilter("field1"))).get();
+            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), missingQuery("field1"))).get();
             assertHitCount(countResponse, 2l);
 
-            countResponse = client().prepareCount().setQuery(constantScoreQuery(missingFilter("field1"))).get();
+            countResponse = client().prepareCount().setQuery(constantScoreQuery(missingQuery("field1"))).get();
             assertHitCount(countResponse, 2l);
 
             countResponse = client().prepareCount().setQuery(queryStringQuery("_missing_:field1")).get();
             assertHitCount(countResponse, 2l);
 
             // wildcard check
-            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), missingFilter("x*"))).get();
+            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), missingQuery("x*"))).get();
             assertHitCount(countResponse, 2l);
 
             // object check
-            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), missingFilter("obj1"))).get();
+            countResponse = client().prepareCount().setQuery(filteredQuery(matchAllQuery(), missingQuery("obj1"))).get();
             assertHitCount(countResponse, 2l);
             if (!backwardsCluster().upgradeOneNode()) {
                 break;
@@ -476,36 +473,6 @@ public class BasicBackwardsCompatibilityTest extends ElasticsearchBackwardsCompa
 
     public Version getMasterVersion() {
         return client().admin().cluster().prepareState().get().getState().nodes().masterNode().getVersion();
-    }
-
-    @Test
-    public void testDeleteByQuery() throws ExecutionException, InterruptedException {
-        createIndex("test");
-        ensureYellow("test");
-
-        int numDocs = iterations(10, 50);
-        IndexRequestBuilder[] indexRequestBuilders = new IndexRequestBuilder[numDocs + 1];
-        for (int i = 0; i < numDocs; i++) {
-            indexRequestBuilders[i] = client().prepareIndex("test", "test", Integer.toString(i)).setSource("field", "value");
-        }
-        indexRequestBuilders[numDocs] = client().prepareIndex("test", "test", Integer.toString(numDocs)).setSource("field", "other_value");
-        indexRandom(true, indexRequestBuilders);
-
-        SearchResponse searchResponse = client().prepareSearch("test").get();
-        assertNoFailures(searchResponse);
-        assertThat(searchResponse.getHits().totalHits(), equalTo((long) numDocs + 1));
-
-        DeleteByQueryResponse deleteByQueryResponse = client().prepareDeleteByQuery("test").setQuery(QueryBuilders.termQuery("field", "value")).get();
-        assertThat(deleteByQueryResponse.getIndices().size(), equalTo(1));
-        for (IndexDeleteByQueryResponse indexDeleteByQueryResponse : deleteByQueryResponse) {
-            assertThat(indexDeleteByQueryResponse.getIndex(), equalTo("test"));
-            assertThat(indexDeleteByQueryResponse.getShardInfo().getFailures().length, equalTo(0));
-        }
-
-        refresh();
-        searchResponse = client().prepareSearch("test").get();
-        assertNoFailures(searchResponse);
-        assertThat(searchResponse.getHits().totalHits(), equalTo(1l));
     }
 
     @Test

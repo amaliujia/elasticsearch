@@ -19,6 +19,7 @@
 
 package org.elasticsearch.action;
 
+import org.apache.lucene.util.LuceneTestCase.Slow;
 import org.elasticsearch.action.admin.indices.alias.Alias;
 import org.elasticsearch.action.admin.indices.analyze.AnalyzeAction;
 import org.elasticsearch.action.admin.indices.analyze.AnalyzeRequest;
@@ -52,7 +53,6 @@ import org.elasticsearch.action.admin.indices.settings.put.UpdateSettingsAction;
 import org.elasticsearch.action.admin.indices.settings.put.UpdateSettingsRequest;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsAction;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsRequest;
-import org.elasticsearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.elasticsearch.action.admin.indices.validate.query.ValidateQueryAction;
 import org.elasticsearch.action.admin.indices.validate.query.ValidateQueryRequest;
 import org.elasticsearch.action.bulk.BulkAction;
@@ -61,8 +61,6 @@ import org.elasticsearch.action.count.CountAction;
 import org.elasticsearch.action.count.CountRequest;
 import org.elasticsearch.action.delete.DeleteAction;
 import org.elasticsearch.action.delete.DeleteRequest;
-import org.elasticsearch.action.deletebyquery.DeleteByQueryAction;
-import org.elasticsearch.action.deletebyquery.DeleteByQueryRequest;
 import org.elasticsearch.action.exists.ExistsAction;
 import org.elasticsearch.action.exists.ExistsRequest;
 import org.elasticsearch.action.explain.ExplainAction;
@@ -73,7 +71,6 @@ import org.elasticsearch.action.get.MultiGetAction;
 import org.elasticsearch.action.get.MultiGetRequest;
 import org.elasticsearch.action.index.IndexAction;
 import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.action.mlt.MoreLikeThisRequest;
 import org.elasticsearch.action.percolate.MultiPercolateAction;
 import org.elasticsearch.action.percolate.MultiPercolateRequest;
 import org.elasticsearch.action.percolate.PercolateAction;
@@ -91,15 +88,11 @@ import org.elasticsearch.action.termvectors.TermVectorsRequest;
 import org.elasticsearch.action.update.UpdateAction;
 import org.elasticsearch.action.update.UpdateRequest;
 import org.elasticsearch.action.update.UpdateResponse;
-import org.elasticsearch.cluster.settings.ClusterDynamicSettings;
-import org.elasticsearch.cluster.settings.DynamicSettings;
-import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.query.QueryBuilders;
-import org.elasticsearch.node.settings.NodeSettingsService;
 import org.elasticsearch.search.action.SearchServiceTransportAction;
 import org.elasticsearch.test.ElasticsearchIntegrationTest;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -116,7 +109,8 @@ import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcke
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
 import static org.hamcrest.Matchers.*;
 
-@ClusterScope(scope = Scope.SUITE, numClientNodes = 1)
+@ClusterScope(scope = Scope.SUITE, numClientNodes = 1, minNumDataNodes = 2)
+@Slow
 public class IndicesRequestTests extends ElasticsearchIntegrationTest {
 
     private final List<String> indices = new ArrayList<>();
@@ -178,7 +172,8 @@ public class IndicesRequestTests extends ElasticsearchIntegrationTest {
         String analyzeShardAction = AnalyzeAction.NAME + "[s]";
         interceptTransportActions(analyzeShardAction);
 
-        AnalyzeRequest analyzeRequest = new AnalyzeRequest(randomIndexOrAlias(), "text");
+        AnalyzeRequest analyzeRequest = new AnalyzeRequest(randomIndexOrAlias());
+        analyzeRequest.text("text");
         internalCluster().clientNodeClient().admin().indices().analyze(analyzeRequest).actionGet();
 
         clearInterceptedActions();
@@ -254,18 +249,6 @@ public class IndicesRequestTests extends ElasticsearchIntegrationTest {
 
         clearInterceptedActions();
         assertSameIndices(updateRequest, updateShardActions);
-    }
-
-    @Test
-    public void testDeleteByQuery() {
-        String[] deleteByQueryShardActions = new String[]{DeleteByQueryAction.NAME + "[s]", DeleteByQueryAction.NAME + "[s][r]"};
-        interceptTransportActions(deleteByQueryShardActions);
-
-        DeleteByQueryRequest deleteByQueryRequest = new DeleteByQueryRequest(randomIndicesOrAliases()).source(new QuerySourceBuilder().setQuery(QueryBuilders.matchAllQuery()));
-        internalCluster().clientNodeClient().deleteByQuery(deleteByQueryRequest).actionGet();
-
-        clearInterceptedActions();
-        assertSameIndices(deleteByQueryRequest, deleteByQueryShardActions);
     }
 
     @Test
@@ -741,34 +724,6 @@ public class IndicesRequestTests extends ElasticsearchIntegrationTest {
         assertSameIndices(searchRequest, SearchServiceTransportAction.SCAN_ACTION_NAME);
     }
 
-    @Test
-    public void testMoreLikeThis() {
-        interceptTransportActions(GetAction.NAME + "[s]", SearchServiceTransportAction.QUERY_ACTION_NAME,
-                SearchServiceTransportAction.FETCH_ID_ACTION_NAME, SearchServiceTransportAction.FREE_CONTEXT_ACTION_NAME);
-
-        String[] randomIndicesOrAliases = randomIndicesOrAliases();
-        for (int i = 0; i < randomIndicesOrAliases.length; i++) {
-            client().prepareIndex(randomIndicesOrAliases[i], "type", "id-" + i).setSource("field", "value").get();
-        }
-        refresh();
-
-        assertAcked(prepareCreate("test-get").addAlias(new Alias("alias-get")));
-        client().prepareIndex("test-get", "type", "1").setSource("field","value").get();
-        String indexGet = randomBoolean() ? "test-get" : "alias-get";
-
-        MoreLikeThisRequest moreLikeThisRequest = new MoreLikeThisRequest(indexGet).type("type").id("1")
-                .searchIndices(randomIndicesOrAliases());
-        internalCluster().clientNodeClient().moreLikeThis(moreLikeThisRequest).actionGet();
-
-        clearInterceptedActions();
-        //get might end up being executed locally, only optionally over the transport
-        assertSameIndicesOptionalRequests(new String[]{indexGet}, GetAction.NAME + "[s]");
-        //query might end up being executed locally as well, only optionally over the transport
-        assertSameIndicesOptionalRequests(moreLikeThisRequest.searchIndices(), SearchServiceTransportAction.QUERY_ACTION_NAME);
-        //free context messages are not necessarily sent through the transport, but if they are, check their indices
-        assertSameIndicesOptionalRequests(moreLikeThisRequest.searchIndices(), SearchServiceTransportAction.FETCH_ID_ACTION_NAME, SearchServiceTransportAction.FREE_CONTEXT_ACTION_NAME);
-    }
-
     private static void assertSameIndices(IndicesRequest originalRequest, String... actions) {
         assertSameIndices(originalRequest, false, actions);
     }
@@ -911,8 +866,8 @@ public class IndicesRequestTests extends ElasticsearchIntegrationTest {
         }
 
         @Override
-        public void registerHandler(String action, TransportRequestHandler handler) {
-            super.registerHandler(action, new InterceptingRequestHandler(action, handler));
+        public <Request extends TransportRequest> void registerRequestHandler(String action, Class<Request> request, String executor, boolean forceExecution, TransportRequestHandler<Request> handler) {
+            super.registerRequestHandler(action, request, executor, forceExecution, new InterceptingRequestHandler(action, handler));
         }
 
         private class InterceptingRequestHandler implements TransportRequestHandler {
@@ -923,11 +878,6 @@ public class IndicesRequestTests extends ElasticsearchIntegrationTest {
             InterceptingRequestHandler(String action, TransportRequestHandler requestHandler) {
                 this.requestHandler = requestHandler;
                 this.action = action;
-            }
-
-            @Override
-            public TransportRequest newInstance() {
-                return requestHandler.newInstance();
             }
 
             @Override
@@ -945,16 +895,6 @@ public class IndicesRequestTests extends ElasticsearchIntegrationTest {
                     }
                 }
                 requestHandler.messageReceived(request, channel);
-            }
-
-            @Override
-            public String executor() {
-                return requestHandler.executor();
-            }
-
-            @Override
-            public boolean isForceExecution() {
-                return requestHandler.isForceExecution();
             }
         }
     }

@@ -20,7 +20,6 @@
 package org.elasticsearch.indices.memory;
 
 import com.google.common.collect.Lists;
-import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
@@ -77,7 +76,7 @@ public class IndexingMemoryController extends AbstractLifecycleComponent<Indexin
         String indexingBufferSetting = this.settings.get("indices.memory.index_buffer_size", "10%");
         if (indexingBufferSetting.endsWith("%")) {
             double percent = Double.parseDouble(indexingBufferSetting.substring(0, indexingBufferSetting.length() - 1));
-            indexingBuffer = new ByteSizeValue((long) (((double) JvmInfo.jvmInfo().mem().heapMax().bytes()) * (percent / 100)));
+            indexingBuffer = new ByteSizeValue((long) (((double) JvmInfo.jvmInfo().getMem().getHeapMax().bytes()) * (percent / 100)));
             ByteSizeValue minIndexingBuffer = this.settings.getAsBytesSize("indices.memory.min_index_buffer_size", new ByteSizeValue(48, ByteSizeUnit.MB));
             ByteSizeValue maxIndexingBuffer = this.settings.getAsBytesSize("indices.memory.max_index_buffer_size", null);
 
@@ -99,7 +98,7 @@ public class IndexingMemoryController extends AbstractLifecycleComponent<Indexin
         String translogBufferSetting = this.settings.get("indices.memory.translog_buffer_size", "1%");
         if (translogBufferSetting.endsWith("%")) {
             double percent = Double.parseDouble(translogBufferSetting.substring(0, translogBufferSetting.length() - 1));
-            translogBuffer = new ByteSizeValue((long) (((double) JvmInfo.jvmInfo().mem().heapMax().bytes()) * (percent / 100)));
+            translogBuffer = new ByteSizeValue((long) (((double) JvmInfo.jvmInfo().getMem().getHeapMax().bytes()) * (percent / 100)));
             ByteSizeValue minTranslogBuffer = this.settings.getAsBytesSize("indices.memory.min_translog_buffer_size", new ByteSizeValue(256, ByteSizeUnit.KB));
             ByteSizeValue maxTranslogBuffer = this.settings.getAsBytesSize("indices.memory.max_translog_buffer_size", null);
 
@@ -125,19 +124,19 @@ public class IndexingMemoryController extends AbstractLifecycleComponent<Indexin
     }
 
     @Override
-    protected void doStart() throws ElasticsearchException {
+    protected void doStart() {
         // its fine to run it on the scheduler thread, no busy work
         this.scheduler = threadPool.scheduleWithFixedDelay(new ShardsIndicesStatusChecker(), interval);
     }
 
     @Override
-    protected void doStop() throws ElasticsearchException {
+    protected void doStop() {
         FutureUtils.cancel(scheduler);
         scheduler = null;
     }
 
     @Override
-    protected void doClose() throws ElasticsearchException {
+    protected void doClose() {
     }
 
     /**
@@ -191,9 +190,20 @@ public class IndexingMemoryController extends AbstractLifecycleComponent<Indexin
                         continue;
                     }
 
+                    if (indexShard.canIndex() == false) {
+                        // not relevant for memory related issues.
+                        continue;
+                    }
+                    final Translog translog;
+                    try {
+                        translog = indexShard.engine().getTranslog();
+                    } catch (EngineClosedException e) {
+                        // not ready yet to be checked for in activity
+                        continue;
+                    }
+
                     final long time = threadPool.estimatedTimeInMillis();
 
-                    Translog translog = indexShard.translog();
                     ShardIndexingStatus status = shardsIndicesStatus.get(indexShard.shardId());
                     if (status == null) {
                         status = new ShardIndexingStatus();
@@ -201,7 +211,7 @@ public class IndexingMemoryController extends AbstractLifecycleComponent<Indexin
                         changes.add(ShardStatusChangeType.ADDED);
                     }
                     // check if it is deemed to be inactive (sam translogId and numberOfOperations over a long period of time)
-                    if (status.translogId == translog.currentId() && translog.estimatedNumberOfOperations() == 0) {
+                    if (status.translogId == translog.currentId() && translog.totalOperations() == 0) {
                         if (status.time == -1) { // first time
                             status.time = time;
                         }
@@ -225,7 +235,7 @@ public class IndexingMemoryController extends AbstractLifecycleComponent<Indexin
                         status.time = -1;
                     }
                     status.translogId = translog.currentId();
-                    status.translogNumberOfOperations = translog.estimatedNumberOfOperations();
+                    status.translogNumberOfOperations = translog.totalOperations();
 
                     if (status.activeIndexing) {
                         activeShards++;

@@ -26,24 +26,20 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.Term;
-import org.apache.lucene.queries.TermsFilter;
+import org.apache.lucene.queries.TermsQuery;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
-import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.Filter;
 import org.apache.lucene.search.MultiTermQuery;
-import org.apache.lucene.search.PrefixFilter;
 import org.apache.lucene.search.PrefixQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.RegexpQuery;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.lucene.BytesRefs;
 import org.elasticsearch.common.lucene.Lucene;
-import org.elasticsearch.common.lucene.search.RegexpFilter;
-import org.elasticsearch.common.lucene.search.XBooleanFilter;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
@@ -51,8 +47,8 @@ import org.elasticsearch.index.fielddata.FieldDataType;
 import org.elasticsearch.index.mapper.InternalMapper;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
-import org.elasticsearch.index.mapper.MergeContext;
 import org.elasticsearch.index.mapper.MergeMappingException;
+import org.elasticsearch.index.mapper.MergeResult;
 import org.elasticsearch.index.mapper.ParseContext;
 import org.elasticsearch.index.mapper.RootMapper;
 import org.elasticsearch.index.mapper.Uid;
@@ -61,6 +57,7 @@ import org.elasticsearch.index.query.QueryParseContext;
 
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -193,24 +190,20 @@ public class IdFieldMapper extends AbstractFieldMapper<String> implements Intern
         if (fieldType.indexOptions() != IndexOptions.NONE || context == null) {
             return super.termQuery(value, context);
         }
-        // no need for constant score filter, since we don't cache the filter, and it always takes deletes into account
-        return new ConstantScoreQuery(termFilter(value, context));
+        final BytesRef[] uids = Uid.createTypeUids(context.queryTypes(), value);
+        if (uids.length == 1) {
+            return new TermQuery(new Term(UidFieldMapper.NAME, uids[0]));
+        } else {
+            return new TermsQuery(UidFieldMapper.NAME, uids);
+        }
     }
 
     @Override
-    public Filter termFilter(Object value, @Nullable QueryParseContext context) {
+    public Query termsQuery(List values, @Nullable QueryParseContext context) {
         if (fieldType.indexOptions() != IndexOptions.NONE || context == null) {
-            return super.termFilter(value, context);
+            return super.termsQuery(values, context);
         }
-        return new TermsFilter(UidFieldMapper.NAME, Uid.createTypeUids(context.queryTypes(), value));
-    }
-
-    @Override
-    public Filter termsFilter(List values, @Nullable QueryParseContext context) {
-        if (fieldType.indexOptions() != IndexOptions.NONE || context == null) {
-            return super.termsFilter(values, context);
-        }
-        return new TermsFilter(UidFieldMapper.NAME, Uid.createTypeUids(context.queryTypes(), values));
+        return new TermsQuery(UidFieldMapper.NAME, Uid.createTypeUids(context.queryTypes(), values));
     }
 
     @Override
@@ -219,13 +212,6 @@ public class IdFieldMapper extends AbstractFieldMapper<String> implements Intern
             return super.prefixQuery(value, method, context);
         }
         Collection<String> queryTypes = context.queryTypes();
-        if (queryTypes.size() == 1) {
-            PrefixQuery prefixQuery = new PrefixQuery(new Term(UidFieldMapper.NAME, Uid.createUidAsBytes(Iterables.getFirst(queryTypes, null), BytesRefs.toBytesRef(value))));
-            if (method != null) {
-                prefixQuery.setRewriteMethod(method);
-            }
-            return prefixQuery;
-        }
         BooleanQuery query = new BooleanQuery();
         for (String queryType : queryTypes) {
             PrefixQuery prefixQuery = new PrefixQuery(new Term(UidFieldMapper.NAME, Uid.createUidAsBytes(queryType, BytesRefs.toBytesRef(value))));
@@ -235,22 +221,6 @@ public class IdFieldMapper extends AbstractFieldMapper<String> implements Intern
             query.add(prefixQuery, BooleanClause.Occur.SHOULD);
         }
         return query;
-    }
-
-    @Override
-    public Filter prefixFilter(Object value, @Nullable QueryParseContext context) {
-        if (fieldType.indexOptions() != IndexOptions.NONE || context == null) {
-            return super.prefixFilter(value, context);
-        }
-        Collection<String> queryTypes = context.queryTypes();
-        if (queryTypes.size() == 1) {
-            return new PrefixFilter(new Term(UidFieldMapper.NAME, Uid.createUidAsBytes(Iterables.getFirst(queryTypes, null), BytesRefs.toBytesRef(value))));
-        }
-        XBooleanFilter filter = new XBooleanFilter();
-        for (String queryType : queryTypes) {
-            filter.add(new PrefixFilter(new Term(UidFieldMapper.NAME, Uid.createUidAsBytes(queryType, BytesRefs.toBytesRef(value)))), BooleanClause.Occur.SHOULD);
-        }
-        return filter;
     }
 
     @Override
@@ -279,24 +249,6 @@ public class IdFieldMapper extends AbstractFieldMapper<String> implements Intern
     }
 
     @Override
-    public Filter regexpFilter(Object value, int flags, int maxDeterminizedStates, @Nullable QueryParseContext context) {
-        if (fieldType.indexOptions() != IndexOptions.NONE || context == null) {
-            return super.regexpFilter(value, flags, maxDeterminizedStates, context);
-        }
-        Collection<String> queryTypes = context.queryTypes();
-        if (queryTypes.size() == 1) {
-            return new RegexpFilter(new Term(UidFieldMapper.NAME, Uid.createUidAsBytes(Iterables.getFirst(queryTypes, null), BytesRefs.toBytesRef(value))),
-                                    flags, maxDeterminizedStates);
-        }
-        XBooleanFilter filter = new XBooleanFilter();
-        for (String queryType : queryTypes) {
-            filter.add(new RegexpFilter(new Term(UidFieldMapper.NAME, Uid.createUidAsBytes(queryType, BytesRefs.toBytesRef(value))),
-                                        flags, maxDeterminizedStates), BooleanClause.Occur.SHOULD);
-        }
-        return filter;
-    }
-
-    @Override
     public void preParse(ParseContext context) throws IOException {
         if (context.sourceToParse().id() != null) {
             context.id(context.sourceToParse().id());
@@ -307,14 +259,9 @@ public class IdFieldMapper extends AbstractFieldMapper<String> implements Intern
     @Override
     public void postParse(ParseContext context) throws IOException {
         if (context.id() == null && !context.sourceToParse().flyweight()) {
-            throw new MapperParsingException("No id found while parsing the content source", context.mappingsModified());
+            throw new MapperParsingException("No id found while parsing the content source");
         }
         // it either get built in the preParse phase, or get parsed...
-    }
-
-    @Override
-    public void parse(ParseContext context) throws IOException {
-        super.parse(context);
     }
 
     @Override
@@ -329,7 +276,7 @@ public class IdFieldMapper extends AbstractFieldMapper<String> implements Intern
             // we are in the parse Phase
             String id = parser.text();
             if (context.id() != null && !context.id().equals(id)) {
-                throw new MapperParsingException("Provided id [" + context.id() + "] does not match the content one [" + id + "]", context.mappingsModified());
+                throw new MapperParsingException("Provided id [" + context.id() + "] does not match the content one [" + id + "]");
             }
             context.id(id);
         } // else we are in the pre/post parse phase
@@ -382,7 +329,7 @@ public class IdFieldMapper extends AbstractFieldMapper<String> implements Intern
     }
 
     @Override
-    public void merge(Mapper mergeWith, MergeContext mergeContext) throws MergeMappingException {
+    public void merge(Mapper mergeWith, MergeResult mergeResult) throws MergeMappingException {
         // do nothing here, no merging, but also no exception
     }
 }

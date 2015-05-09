@@ -24,7 +24,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.MoreExecutors;
 import org.apache.lucene.util.Counter;
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
@@ -92,13 +91,14 @@ public class ThreadPool extends AbstractComponent {
 
     private final EstimatedTimeThread estimatedTimeThread;
 
+    private boolean settingsListenerIsSet = false;
+
 
     public ThreadPool(String name) {
-        this(ImmutableSettings.builder().put("name", name).build(), null);
+        this(ImmutableSettings.builder().put("name", name).build());
     }
 
-    @Inject
-    public ThreadPool(Settings settings, @Nullable NodeSettingsService nodeSettingsService) {
+    public ThreadPool(Settings settings) {
         super(settings);
 
         assert settings.get("name") != null : "ThreadPool's settings should contain a name";
@@ -142,20 +142,25 @@ public class ThreadPool extends AbstractComponent {
 
         executors.put(Names.SAME, new ExecutorHolder(MoreExecutors.directExecutor(), new Info(Names.SAME, "same")));
         if (!executors.get(Names.GENERIC).info.getType().equals("cached")) {
-            throw new ElasticsearchIllegalArgumentException("generic thread pool must be of type cached");
+            throw new IllegalArgumentException("generic thread pool must be of type cached");
         }
         this.executors = ImmutableMap.copyOf(executors);
         this.scheduler = new ScheduledThreadPoolExecutor(1, EsExecutors.daemonThreadFactory(settings, "scheduler"), new EsAbortPolicy());
         this.scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         this.scheduler.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
         this.scheduler.setRemoveOnCancelPolicy(true);
-        if (nodeSettingsService != null) {
-            nodeSettingsService.addListener(new ApplySettings());
-        }
 
         TimeValue estimatedTimeInterval = settings.getAsTime("threadpool.estimated_time_interval", TimeValue.timeValueMillis(200));
         this.estimatedTimeThread = new EstimatedTimeThread(EsExecutors.threadName(settings, "[timer]"), estimatedTimeInterval.millis());
         this.estimatedTimeThread.start();
+    }
+
+    public void setNodeSettingsService(NodeSettingsService nodeSettingsService) {
+        if(settingsListenerIsSet) {
+            throw new IllegalStateException("the node settings listener was set more then once");
+        }
+        nodeSettingsService.addListener(new ApplySettings());
+        settingsListenerIsSet = true;
     }
 
     public long estimatedTimeInMillis() {
@@ -225,7 +230,7 @@ public class ThreadPool extends AbstractComponent {
     public Executor executor(String name) {
         Executor executor = executors.get(name).executor();
         if (executor == null) {
-            throw new ElasticsearchIllegalArgumentException("No executor found for [" + name + "]");
+            throw new IllegalArgumentException("No executor found for [" + name + "]");
         }
         return executor;
     }
@@ -411,7 +416,7 @@ public class ThreadPool extends AbstractComponent {
             Executor executor = EsExecutors.newScaling(min, size, keepAlive.millis(), TimeUnit.MILLISECONDS, threadFactory);
             return new ExecutorHolder(executor, new Info(name, type, min, size, keepAlive, null));
         }
-        throw new ElasticsearchIllegalArgumentException("No type found [" + type + "], for [" + name + "]");
+        throw new IllegalArgumentException("No type found [" + type + "], for [" + name + "]");
     }
 
     public void updateSettings(Settings settings) {

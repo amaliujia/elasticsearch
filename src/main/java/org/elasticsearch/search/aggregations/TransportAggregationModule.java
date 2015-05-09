@@ -36,6 +36,8 @@ import org.elasticsearch.search.aggregations.bucket.range.InternalRange;
 import org.elasticsearch.search.aggregations.bucket.range.date.InternalDateRange;
 import org.elasticsearch.search.aggregations.bucket.range.geodistance.InternalGeoDistance;
 import org.elasticsearch.search.aggregations.bucket.range.ipv4.InternalIPv4Range;
+import org.elasticsearch.search.aggregations.bucket.sampler.InternalSampler;
+import org.elasticsearch.search.aggregations.bucket.sampler.UnmappedSampler;
 import org.elasticsearch.search.aggregations.bucket.significant.SignificantLongTerms;
 import org.elasticsearch.search.aggregations.bucket.significant.SignificantStringTerms;
 import org.elasticsearch.search.aggregations.bucket.significant.UnmappedSignificantTerms;
@@ -57,6 +59,16 @@ import org.elasticsearch.search.aggregations.metrics.stats.extended.InternalExte
 import org.elasticsearch.search.aggregations.metrics.sum.InternalSum;
 import org.elasticsearch.search.aggregations.metrics.tophits.InternalTopHits;
 import org.elasticsearch.search.aggregations.metrics.valuecount.InternalValueCount;
+import org.elasticsearch.search.aggregations.reducers.InternalSimpleValue;
+import org.elasticsearch.search.aggregations.reducers.bucketmetrics.InternalBucketMetricValue;
+import org.elasticsearch.search.aggregations.reducers.bucketmetrics.avg.AvgBucketReducer;
+import org.elasticsearch.search.aggregations.reducers.bucketmetrics.max.MaxBucketReducer;
+import org.elasticsearch.search.aggregations.reducers.bucketmetrics.min.MinBucketReducer;
+import org.elasticsearch.search.aggregations.reducers.bucketmetrics.sum.SumBucketReducer;
+import org.elasticsearch.search.aggregations.reducers.derivative.DerivativeReducer;
+import org.elasticsearch.search.aggregations.reducers.derivative.InternalDerivative;
+import org.elasticsearch.search.aggregations.reducers.movavg.MovAvgReducer;
+import org.elasticsearch.search.aggregations.reducers.movavg.models.TransportMovAvgModelModule;
 
 /**
  * A module that registers all the transport streams for the addAggregation
@@ -83,13 +95,15 @@ public class TransportAggregationModule extends AbstractModule implements SpawnM
         InternalGlobal.registerStreams();
         InternalFilter.registerStreams();
         InternalFilters.registerStream();
+        InternalSampler.registerStreams();
+        UnmappedSampler.registerStreams();
         InternalMissing.registerStreams();
         StringTerms.registerStreams();
         LongTerms.registerStreams();
         SignificantStringTerms.registerStreams();
         SignificantLongTerms.registerStreams();
         UnmappedSignificantTerms.registerStreams();
-        InternalGeoHashGrid.registerStreams();                
+        InternalGeoHashGrid.registerStreams();
         DoubleTerms.registerStreams();
         UnmappedTerms.registerStreams();
         InternalRange.registerStream();
@@ -102,10 +116,21 @@ public class TransportAggregationModule extends AbstractModule implements SpawnM
         InternalTopHits.registerStreams();
         InternalGeoBounds.registerStream();
         InternalChildren.registerStream();
+
+        // Reducers
+        DerivativeReducer.registerStreams();
+        InternalDerivative.registerStreams();
+        InternalSimpleValue.registerStreams();
+        InternalBucketMetricValue.registerStreams();
+        MaxBucketReducer.registerStreams();
+        MinBucketReducer.registerStreams();
+        AvgBucketReducer.registerStreams();
+        SumBucketReducer.registerStreams();
+        MovAvgReducer.registerStreams();
     }
 
     @Override
     public Iterable<? extends Module> spawnModules() {
-        return ImmutableList.of(new TransportSignificantTermsHeuristicModule());
+        return ImmutableList.of(new TransportSignificantTermsHeuristicModule(), new TransportMovAvgModelModule());
     }
 }

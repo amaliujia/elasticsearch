@@ -19,7 +19,6 @@
 
 package org.elasticsearch.search.internal;
 
-import org.apache.lucene.search.Filter;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
@@ -35,7 +34,7 @@ import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.FieldMappers;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.query.IndexQueryParserService;
-import org.elasticsearch.index.query.ParsedFilter;
+import org.elasticsearch.index.query.ParsedQuery;
 import org.elasticsearch.index.query.ParsedQuery;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.similarity.SimilarityService;
@@ -79,7 +78,7 @@ public abstract class FilteredSearchContext extends SearchContext {
     }
 
     @Override
-    public Filter searchFilter(String[] types) {
+    public Query searchFilter(String[] types) {
         return in.searchFilter(types);
     }
 
@@ -289,11 +288,6 @@ public abstract class FilteredSearchContext extends SearchContext {
     }
 
     @Override
-    public FilterCache filterCache() {
-        return in.filterCache();
-    }
-
-    @Override
     public BitsetFilterCache bitsetFilterCache() {
         return in.bitsetFilterCache();
     }
@@ -354,17 +348,17 @@ public abstract class FilteredSearchContext extends SearchContext {
     }
 
     @Override
-    public SearchContext parsedPostFilter(ParsedFilter postFilter) {
+    public SearchContext parsedPostFilter(ParsedQuery postFilter) {
         return in.parsedPostFilter(postFilter);
     }
 
     @Override
-    public ParsedFilter parsedPostFilter() {
+    public ParsedQuery parsedPostFilter() {
         return in.parsedPostFilter();
     }
 
     @Override
-    public Filter aliasFilter() {
+    public Query aliasFilter() {
         return in.aliasFilter();
     }
 

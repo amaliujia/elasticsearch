@@ -20,7 +20,6 @@
 package org.elasticsearch.indices.memory.breaker;
 
 import org.apache.lucene.util.LuceneTestCase;
-import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.admin.cluster.node.stats.NodeStats;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsResponse;
 import org.elasticsearch.action.index.IndexRequestBuilder;
@@ -241,8 +240,8 @@ public class CircuitBreakerServiceTests extends ElasticsearchIntegrationTest {
             fail("should have thrown an exception");
         } catch (Exception e) {
             String errMsg = "[fielddata] Data too large, data for [test] would be larger than limit of [10/10b]";
-            assertThat("Exception: " + ExceptionsHelper.unwrapCause(e) + " should contain a CircuitBreakingException",
-                    ExceptionsHelper.unwrapCause(e).getMessage().contains(errMsg), equalTo(true));
+            assertThat("Exception: " + e.toString() + " should contain a CircuitBreakingException",
+                    e.toString().contains(errMsg), equalTo(true));
         }
 
         assertFailures(client.prepareSearch("cb-test").setQuery(matchAllQuery()).addSort("test", SortOrder.DESC),
@@ -263,8 +262,8 @@ public class CircuitBreakerServiceTests extends ElasticsearchIntegrationTest {
             fail("should have thrown an exception");
         } catch (Exception e) {
             String errMsg = "[parent] Data too large, data for [test] would be larger than limit of [15/15b]";
-            assertThat("Exception: " + ExceptionsHelper.unwrapCause(e) + " should contain a CircuitBreakingException",
-                    ExceptionsHelper.unwrapCause(e).getMessage().contains(errMsg), equalTo(true));
+            assertThat("Exception: " +e.toString() + " should contain a CircuitBreakingException",
+                    e.toString().contains(errMsg), equalTo(true));
         }
     }
 
@@ -297,8 +296,8 @@ public class CircuitBreakerServiceTests extends ElasticsearchIntegrationTest {
             fail("aggregation should have tripped the breaker");
         } catch (Exception e) {
             String errMsg = "CircuitBreakingException[[request] Data too large, data for [<reused_arrays>] would be larger than limit of [10/10b]]";
-            assertThat("Exception: " + ExceptionsHelper.unwrapCause(e) + " should contain a CircuitBreakingException",
-                    ExceptionsHelper.unwrapCause(e).getMessage().contains(errMsg), equalTo(true));
+            assertThat("Exception: " + e.toString() + " should contain a CircuitBreakingException",
+                    e.toString().contains(errMsg), equalTo(true));
         }
     }
 

@@ -19,6 +19,7 @@
 
 package org.elasticsearch.common.io;
 
+import org.elasticsearch.common.SuppressForbidden;
 import org.jboss.netty.buffer.ChannelBuffer;
 
 import java.io.EOFException;
@@ -28,6 +29,7 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.GatheringByteChannel;
 import java.nio.channels.WritableByteChannel;
 
+@SuppressForbidden(reason = "Channel#read")
 public final class Channels {
 
     private Channels() {
@@ -83,6 +85,22 @@ public final class Channels {
     public static int readFromFileChannel(FileChannel channel, long channelPosition, byte[] dest, int destOffset, int length) throws IOException {
         ByteBuffer buffer = ByteBuffer.wrap(dest, destOffset, length);
         return readFromFileChannel(channel, channelPosition, buffer);
+    }
+
+
+    /**
+     * read from a file channel into a byte buffer, starting at a certain position.  An EOFException will be thrown if you
+     * attempt to read beyond the end of file.
+     *
+     * @param channel         channel to read from
+     * @param channelPosition position to read from
+     * @param dest            destination {@link java.nio.ByteBuffer} to put data in
+     */
+    public static void readFromFileChannelWithEofException(FileChannel channel, long channelPosition, ByteBuffer dest) throws IOException {
+        int read = readFromFileChannel(channel, channelPosition, dest);
+        if (read < 0) {
+            throw new EOFException("read past EOF. pos [" + channelPosition + "] length: [" + dest.limit() + "] end: [" + channel.size() + "]");
+        }
     }
 
     /**

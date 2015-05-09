@@ -19,10 +19,19 @@
 
 package org.elasticsearch.common.lucene.search;
 
-import org.apache.lucene.search.*;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanClause.Occur;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.ConstantScoreQuery;
+import org.apache.lucene.search.Filter;
+import org.apache.lucene.search.MatchAllDocsQuery;
+import org.apache.lucene.search.PrefixQuery;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.QueryWrapperFilter;
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.index.query.QueryParseContext;
-import org.elasticsearch.index.search.child.CustomQueryWrappingFilter;
+import org.elasticsearch.index.mapper.internal.TypeFieldMapper;
 
 import java.util.List;
 import java.util.regex.Pattern;
@@ -32,22 +41,36 @@ import java.util.regex.Pattern;
  */
 public class Queries {
 
-    /**
-     * A match all docs filter. Note, requires no caching!.
-     */
-    public final static Filter MATCH_ALL_FILTER = new MatchAllDocsFilter();
-    public final static Filter MATCH_NO_FILTER = new MatchNoDocsFilter();
-
     public static Query newMatchAllQuery() {
-        // We don't use MatchAllDocsQuery, its slower than the one below ... (much slower)
-        // NEVER cache this XConstantScore Query it's not immutable and based on #3521
-        // some code might set a boost on this query.
-        return new ConstantScoreQuery(MATCH_ALL_FILTER);
+        return new MatchAllDocsQuery();
     }
 
     /** Return a query that matches no document. */
     public static Query newMatchNoDocsQuery() {
-        return new MatchNoDocsQuery();
+        return new BooleanQuery();
+    }
+
+    public static Filter newNestedFilter() {
+        return new QueryWrapperFilter(new PrefixQuery(new Term(TypeFieldMapper.NAME, new BytesRef("__"))));
+    }
+
+    public static Filter newNonNestedFilter() {
+        return new QueryWrapperFilter(not(newNestedFilter()));
+    }
+
+    public static BooleanQuery filtered(Query query, Query filter) {
+        BooleanQuery bq = new BooleanQuery();
+        bq.add(query, Occur.MUST);
+        bq.add(filter, Occur.FILTER);
+        return bq;
+    }
+
+    /** Return a query that matches all documents but those that match the given query. */
+    public static Query not(Query q) {
+        BooleanQuery bq = new BooleanQuery();
+        bq.add(new MatchAllDocsQuery(), Occur.MUST);
+        bq.add(q, Occur.MUST_NOT);
+        return bq;
     }
 
     public static boolean isNegativeQuery(Query q) {
@@ -75,10 +98,11 @@ public class Queries {
 
     public static boolean isConstantMatchAllQuery(Query query) {
         if (query instanceof ConstantScoreQuery) {
-            ConstantScoreQuery scoreQuery = (ConstantScoreQuery) query;
-            if (scoreQuery.getQuery() instanceof MatchAllDocsFilter || scoreQuery.getQuery() instanceof MatchAllDocsQuery) {
-                return true;
-            }
+            return isConstantMatchAllQuery(((ConstantScoreQuery) query).getQuery());
+        } else if (query instanceof QueryWrapperFilter) {
+            return isConstantMatchAllQuery(((QueryWrapperFilter) query).getQuery());
+        } else if (query instanceof MatchAllDocsQuery) {
+            return true;
         }
         return false;
     }
@@ -140,30 +164,5 @@ public class Queries {
         return (optionalClauseCount < result ?
                 optionalClauseCount : (result < 0 ? 0 : result));
 
-    }
-
-    /**
-     * Wraps a query in a filter.
-     *
-     * If a filter has an anti per segment execution / caching nature then @{@link CustomQueryWrappingFilter} is returned
-     * otherwise the standard {@link org.apache.lucene.search.QueryWrapperFilter} is returned.
-     */
-    public static Filter wrap(Query query, QueryParseContext context) {
-        return FACTORY.wrap(query, context);
-    }
-
-    private static final QueryWrapperFilterFactory FACTORY = new QueryWrapperFilterFactory();
-    // NOTE: This is a separate class since we added QueryWrapperFilter as a forbidden API
-    // that way we can exclude only the inner class without excluding the entire Queries class
-    // and potentially miss a forbidden API usage!
-    private static final class QueryWrapperFilterFactory {
-
-        public Filter wrap(Query query, QueryParseContext context) {
-            if (context.requireCustomQueryWrappingFilter() || CustomQueryWrappingFilter.shouldUseCustomQueryWrappingFilter(query)) {
-                return new CustomQueryWrappingFilter(query);
-            } else {
-                return new QueryWrapperFilter(query);
-            }
-        }
     }
 }

@@ -25,16 +25,15 @@ import java.io.IOException;
 
 /**
  * A filter that simply wraps a query.
- *
- *
+ * @deprecated Useless now that queries and filters are merged: pass the
+ *             query as a filter directly.
  */
-public class QueryFilterBuilder extends BaseFilterBuilder {
+@Deprecated
+public class QueryFilterBuilder extends BaseQueryBuilder {
 
     private final QueryBuilder queryBuilder;
 
-    private Boolean cache;
-
-    private String filterName;
+    private String queryName;
 
     /**
      * A filter that simply wraps a query.
@@ -46,35 +45,24 @@ public class QueryFilterBuilder extends BaseFilterBuilder {
     }
 
     /**
-     * Sets the filter name for the filter that can be used when searching for matched_filters per hit.
+     * Sets the query name for the filter that can be used when searching for matched_filters per hit.
      */
-    public QueryFilterBuilder filterName(String filterName) {
-        this.filterName = filterName;
-        return this;
-    }
-
-    /**
-     * Should the filter be cached or not. Defaults to <tt>false</tt>.
-     */
-    public QueryFilterBuilder cache(boolean cache) {
-        this.cache = cache;
+    public QueryFilterBuilder queryName(String queryName) {
+        this.queryName = queryName;
         return this;
     }
 
     @Override
     protected void doXContent(XContentBuilder builder, Params params) throws IOException {
-        if (filterName == null && cache == null) {
+        if (queryName == null) {
             builder.field(QueryFilterParser.NAME);
             queryBuilder.toXContent(builder, params);
         } else {
             builder.startObject(FQueryFilterParser.NAME);
             builder.field("query");
             queryBuilder.toXContent(builder, params);
-            if (filterName != null) {
-                builder.field("_name", filterName);
-            }
-            if (cache != null) {
-                builder.field("_cache", cache);
+            if (queryName != null) {
+                builder.field("_name", queryName);
             }
             builder.endObject();
         }

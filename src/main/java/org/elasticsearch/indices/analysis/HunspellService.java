@@ -22,11 +22,13 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.util.concurrent.UncheckedExecutionException;
+
 import org.apache.lucene.analysis.hunspell.Dictionary;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.FileSystemUtils;
+import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
@@ -72,7 +74,7 @@ public class HunspellService extends AbstractComponent {
 
     public final static String HUNSPELL_LAZY_LOAD = "indices.analysis.hunspell.dictionary.lazy";
     public final static String HUNSPELL_IGNORE_CASE = "indices.analysis.hunspell.dictionary.ignore_case";
-    public final static String HUNSPELL_LOCATION = "indices.analysis.hunspell.dictionary.location";
+    private final static String OLD_HUNSPELL_LOCATION = "indices.analysis.hunspell.dictionary.location";
     private final LoadingCache<String, Dictionary> dictionaries;
     private final Map<String, Dictionary> knownDictionaries;
 
@@ -114,9 +116,9 @@ public class HunspellService extends AbstractComponent {
     }
 
     private Path resolveHunspellDirectory(Settings settings, Environment env) {
-        String location = settings.get(HUNSPELL_LOCATION, null);
+        String location = settings.get(OLD_HUNSPELL_LOCATION, null);
         if (location != null) {
-            return Paths.get(location);
+            throw new IllegalArgumentException("please, put your hunspell dictionaries under config/hunspell !");
         }
         return env.configFile().resolve("hunspell");
     }

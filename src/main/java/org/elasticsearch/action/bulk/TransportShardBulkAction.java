@@ -19,14 +19,10 @@
 
 package org.elasticsearch.action.bulk;
 
-import com.google.common.collect.Sets;
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.ElasticsearchIllegalStateException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.ActionRequest;
-import org.elasticsearch.action.ActionWriteResponse;
 import org.elasticsearch.action.RoutingMissingException;
-import org.elasticsearch.action.WriteFailureException;
 import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.index.IndexRequest;
@@ -48,14 +44,16 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.index.IndexService;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.index.engine.DocumentAlreadyExistsException;
 import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.engine.VersionConflictEngineException;
-import org.elasticsearch.index.mapper.DocumentMapper;
+import org.elasticsearch.index.mapper.Mapping;
 import org.elasticsearch.index.mapper.SourceToParse;
-import org.elasticsearch.index.IndexService;
 import org.elasticsearch.index.shard.IndexShard;
+import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -63,7 +61,6 @@ import org.elasticsearch.transport.TransportRequestOptions;
 import org.elasticsearch.transport.TransportService;
 
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Performs the index operation.
@@ -75,7 +72,6 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
 
     public static final String ACTION_NAME = BulkAction.NAME + "[s]";
 
-    private final MappingUpdatedAction mappingUpdatedAction;
     private final UpdateHelper updateHelper;
     private final boolean allowIdGeneration;
 
@@ -83,15 +79,11 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
     public TransportShardBulkAction(Settings settings, TransportService transportService, ClusterService clusterService,
                                     IndicesService indicesService, ThreadPool threadPool, ShardStateAction shardStateAction,
                                     MappingUpdatedAction mappingUpdatedAction, UpdateHelper updateHelper, ActionFilters actionFilters) {
-        super(settings, ACTION_NAME, transportService, clusterService, indicesService, threadPool, shardStateAction, actionFilters);
-        this.mappingUpdatedAction = mappingUpdatedAction;
+        super(settings, ACTION_NAME, transportService, clusterService, indicesService, threadPool, shardStateAction, mappingUpdatedAction,
+                actionFilters,
+                BulkShardRequest.class, BulkShardRequest.class, ThreadPool.Names.BULK);
         this.updateHelper = updateHelper;
         this.allowIdGeneration = settings.getAsBoolean("action.allow_id_generation", true);
-    }
-
-    @Override
-    protected String executor() {
-        return ThreadPool.Names.BULK;
     }
 
     @Override
@@ -103,17 +95,6 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
     protected TransportRequestOptions transportOptions() {
         return BulkAction.INSTANCE.transportOptions(settings);
     }
-
-    @Override
-    protected BulkShardRequest newRequestInstance() {
-        return new BulkShardRequest();
-    }
-
-    @Override
-    protected BulkShardRequest newReplicaRequestInstance() {
-        return newRequestInstance();
-    }
-
     @Override
     protected BulkShardResponse newResponseInstance() {
         return new BulkShardResponse();
@@ -132,12 +113,12 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
     @Override
     protected Tuple<BulkShardResponse, BulkShardRequest> shardOperationOnPrimary(ClusterState clusterState, PrimaryOperationRequest shardRequest) {
         final BulkShardRequest request = shardRequest.request;
-        IndexService indexService = indicesService.indexServiceSafe(request.index());
-        IndexShard indexShard = indexService.shardSafe(shardRequest.shardId.id());
-        final Set<String> mappingTypesToUpdate = Sets.newHashSet();
+        final IndexService indexService = indicesService.indexServiceSafe(request.index());
+        final IndexShard indexShard = indexService.shardSafe(shardRequest.shardId.id());
 
         long[] preVersions = new long[request.items().length];
         VersionType[] preVersionTypes = new VersionType[request.items().length];
+        Translog.Location location = null;
         for (int requestIndex = 0; requestIndex < request.items().length; requestIndex++) {
             BulkItemRequest item = request.items()[requestIndex];
             if (item.request() instanceof IndexRequest) {
@@ -145,20 +126,11 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                 preVersions[requestIndex] = indexRequest.version();
                 preVersionTypes[requestIndex] = indexRequest.versionType();
                 try {
-                    try {
-                        WriteResult result = shardIndexOperation(request, indexRequest, clusterState, indexShard, true);
-                        // add the response
-                        IndexResponse indexResponse = result.response();
-                        setResponse(item, new BulkItemResponse(item.id(), indexRequest.opType().lowercase(), indexResponse));
-                        if (result.mappingTypeToUpdate != null) {
-                            mappingTypesToUpdate.add(result.mappingTypeToUpdate);
-                        }
-                    } catch (WriteFailureException e) {
-                        if (e.getMappingTypeToUpdate() != null) {
-                            mappingTypesToUpdate.add(e.getMappingTypeToUpdate());
-                        }
-                        throw e.getCause();
-                    }
+                    WriteResult<IndexResponse> result = shardIndexOperation(request, indexRequest, clusterState, indexShard, true);
+                    location = locationToSync(location, result.location);
+                    // add the response
+                    IndexResponse indexResponse = result.response();
+                    setResponse(item, new BulkItemResponse(item.id(), indexRequest.opType().lowercase(), indexResponse));
                 } catch (Throwable e) {
                     // rethrow the failure if we are going to retry on primary and let parent failure to handle it
                     if (retryPrimaryException(e)) {
@@ -166,15 +138,9 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                         for (int j = 0; j < requestIndex; j++) {
                             applyVersion(request.items()[j], preVersions[j], preVersionTypes[j]);
                         }
-                        for (String mappingTypeToUpdate : mappingTypesToUpdate) {
-                            DocumentMapper docMapper = indexService.mapperService().documentMapper(mappingTypeToUpdate);
-                            if (docMapper != null) {
-                                mappingUpdatedAction.updateMappingOnMaster(indexService.index().name(), docMapper, indexService.indexUUID());
-                            }
-                        }
                         throw (ElasticsearchException) e;
                     }
-                    if (e instanceof ElasticsearchException && ((ElasticsearchException) e).status() == RestStatus.CONFLICT) {
+                    if (ExceptionsHelper.status(e) == RestStatus.CONFLICT) {
                         logger.trace("{} failed to execute bulk item (index) {}", e, shardRequest.shardId, indexRequest);
                     } else {
                         logger.debug("{} failed to execute bulk item (index) {}", e, shardRequest.shardId, indexRequest);
@@ -196,7 +162,9 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
 
                 try {
                     // add the response
-                    DeleteResponse deleteResponse = shardDeleteOperation(request, deleteRequest, indexShard).response();
+                    final WriteResult<DeleteResponse> writeResult = shardDeleteOperation(request, deleteRequest, indexShard);
+                    DeleteResponse deleteResponse = writeResult.response();
+                    location = locationToSync(location, writeResult.location);
                     setResponse(item, new BulkItemResponse(item.id(), OP_TYPE_DELETE, deleteResponse));
                 } catch (Throwable e) {
                     // rethrow the failure if we are going to retry on primary and let parent failure to handle it
@@ -207,7 +175,7 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                         }
                         throw (ElasticsearchException) e;
                     }
-                    if (e instanceof ElasticsearchException && ((ElasticsearchException) e).status() == RestStatus.CONFLICT) {
+                    if (ExceptionsHelper.status(e) == RestStatus.CONFLICT) {
                         logger.trace("{} failed to execute bulk item (delete) {}", e, shardRequest.shardId, deleteRequest);
                     } else {
                         logger.debug("{} failed to execute bulk item (delete) {}", e, shardRequest.shardId, deleteRequest);
@@ -235,10 +203,13 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                         updateResult = new UpdateResult(null, null, false, t, null);
                     }
                     if (updateResult.success()) {
+                        if (updateResult.writeResult != null) {
+                            location = locationToSync(location, updateResult.writeResult.location);
+                        }
                         switch (updateResult.result.operation()) {
                             case UPSERT:
                             case INDEX:
-                                WriteResult result = updateResult.writeResult;
+                                WriteResult<IndexResponse> result = updateResult.writeResult;
                                 IndexRequest indexRequest = updateResult.request();
                                 BytesReference indexSourceAsBytes = indexRequest.source();
                                 // add the response
@@ -250,12 +221,10 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                                 }
                                 item = request.items()[requestIndex] = new BulkItemRequest(request.items()[requestIndex].id(), indexRequest);
                                 setResponse(item, new BulkItemResponse(item.id(), OP_TYPE_UPDATE, updateResponse));
-                                if (result.mappingTypeToUpdate != null) {
-                                    mappingTypesToUpdate.add(result.mappingTypeToUpdate);
-                                }
                                 break;
                             case DELETE:
-                                DeleteResponse response = updateResult.writeResult.response();
+                                WriteResult<DeleteResponse> writeResult = updateResult.writeResult;
+                                DeleteResponse response = writeResult.response();
                                 DeleteRequest deleteRequest = updateResult.request();
                                 updateResponse = new UpdateResponse(response.getShardInfo(), response.getIndex(), response.getType(), response.getId(), response.getVersion(), false);
                                 updateResponse.setGetResult(updateHelper.extractGetResult(updateRequest, shardRequest.request.index(), response.getVersion(), updateResult.result.updatedSourceAsMap(), updateResult.result.updateSourceContentType(), null));
@@ -299,7 +268,7 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                                     case UPSERT:
                                     case INDEX:
                                         IndexRequest indexRequest = updateResult.request();
-                                        if (t instanceof ElasticsearchException && ((ElasticsearchException) t).status() == RestStatus.CONFLICT) {
+                                        if (ExceptionsHelper.status(t) == RestStatus.CONFLICT) {
                                             logger.trace("{} failed to execute bulk item (index) {}", t, shardRequest.shardId, indexRequest);
                                         } else {
                                             logger.debug("{} failed to execute bulk item (index) {}", t, shardRequest.shardId, indexRequest);
@@ -309,7 +278,7 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                                         break;
                                     case DELETE:
                                         DeleteRequest deleteRequest = updateResult.request();
-                                        if (t instanceof ElasticsearchException && ((ElasticsearchException) t).status() == RestStatus.CONFLICT) {
+                                        if (ExceptionsHelper.status(t) == RestStatus.CONFLICT) {
                                             logger.trace("{} failed to execute bulk item (delete) {}", t, shardRequest.shardId, deleteRequest);
                                         } else {
                                             logger.debug("{} failed to execute bulk item (delete) {}", t, shardRequest.shardId, deleteRequest);
@@ -325,26 +294,15 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
 
                     }
                 }
+            } else {
+                throw new IllegalStateException("Unexpected index operation: " + item.request());
             }
 
             assert item.getPrimaryResponse() != null;
             assert preVersionTypes[requestIndex] != null;
         }
 
-        for (String mappingTypToUpdate : mappingTypesToUpdate) {
-            DocumentMapper docMapper = indexService.mapperService().documentMapper(mappingTypToUpdate);
-            if (docMapper != null) {
-                mappingUpdatedAction.updateMappingOnMaster(indexService.index().name(), docMapper, indexService.indexUUID());
-            }
-        }
-
-        if (request.refresh()) {
-            try {
-                indexShard.refresh("refresh_flag_bulk");
-            } catch (Throwable e) {
-                // ignore
-            }
-        }
+        processAfter(request, indexShard, location);
         BulkItemResponse[] responses = new BulkItemResponse[request.items().length];
         BulkItemRequest[] items = request.items();
         for (int i = 0; i < items.length; i++) {
@@ -360,30 +318,8 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
         }
     }
 
-    static class WriteResult {
-
-        final ActionWriteResponse response;
-        final String mappingTypeToUpdate;
-        final Engine.IndexingOperation op;
-
-        WriteResult(ActionWriteResponse response, String mappingTypeToUpdate, Engine.IndexingOperation op) {
-            this.response = response;
-            this.mappingTypeToUpdate = mappingTypeToUpdate;
-            this.op = op;
-        }
-
-        @SuppressWarnings("unchecked")
-        <T extends ActionWriteResponse> T response() {
-            // this sets total, pending and failed to 0 and this is ok, because we will embed this into the replica
-            // request and not use it
-            response.setShardInfo(new ActionWriteResponse.ShardInfo());
-            return (T) response;
-        }
-
-    }
-
     private WriteResult shardIndexOperation(BulkShardRequest request, IndexRequest indexRequest, ClusterState clusterState,
-                                            IndexShard indexShard, boolean processed) {
+                                            IndexShard indexShard, boolean processed) throws Throwable {
 
         // validate, if routing is required, that we got routing
         MappingMetaData mappingMd = clusterState.metaData().index(request.index()).mappingOrDefault(indexRequest.type());
@@ -397,51 +333,10 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
             indexRequest.process(clusterState.metaData(), mappingMd, allowIdGeneration, request.index());
         }
 
-        SourceToParse sourceToParse = SourceToParse.source(SourceToParse.Origin.PRIMARY, indexRequest.source()).type(indexRequest.type()).id(indexRequest.id())
-                .routing(indexRequest.routing()).parent(indexRequest.parent()).timestamp(indexRequest.timestamp()).ttl(indexRequest.ttl());
-
-        // update mapping on master if needed, we won't update changes to the same type, since once its changed, it won't have mappers added
-        String mappingTypeToUpdate = null;
-
-        long version;
-        boolean created;
-        Engine.IndexingOperation op;
-        try {
-            if (indexRequest.opType() == IndexRequest.OpType.INDEX) {
-                Engine.Index index = indexShard.prepareIndex(sourceToParse, indexRequest.version(), indexRequest.versionType(), Engine.Operation.Origin.PRIMARY, request.canHaveDuplicates() || indexRequest.canHaveDuplicates());
-                if (index.parsedDoc().mappingsModified()) {
-                    mappingTypeToUpdate = indexRequest.type();
-                }
-                indexShard.index(index);
-                version = index.version();
-                op = index;
-                created = index.created();
-            } else {
-                Engine.Create create = indexShard.prepareCreate(sourceToParse, indexRequest.version(), indexRequest.versionType(), Engine.Operation.Origin.PRIMARY,
-                        request.canHaveDuplicates() || indexRequest.canHaveDuplicates(), indexRequest.autoGeneratedId());
-                if (create.parsedDoc().mappingsModified()) {
-                    mappingTypeToUpdate = indexRequest.type();
-                }
-                indexShard.create(create);
-                version = create.version();
-                op = create;
-                created = true;
-            }
-            // update the version on request so it will happen on the replicas
-            indexRequest.versionType(indexRequest.versionType().versionTypeForReplicationAndRecovery());
-            indexRequest.version(version);
-        } catch (Throwable t) {
-            throw new WriteFailureException(t, mappingTypeToUpdate);
-        }
-
-        assert indexRequest.versionType().validateVersionForWrites(indexRequest.version());
-
-
-        IndexResponse indexResponse = new IndexResponse(request.index(), indexRequest.type(), indexRequest.id(), version, created);
-        return new WriteResult(indexResponse, mappingTypeToUpdate, op);
+        return executeIndexRequestOnPrimary(request, indexRequest, indexShard);
     }
 
-    private WriteResult shardDeleteOperation(BulkShardRequest request, DeleteRequest deleteRequest, IndexShard indexShard) {
+    private WriteResult<DeleteResponse> shardDeleteOperation(BulkShardRequest request, DeleteRequest deleteRequest, IndexShard indexShard) {
         Engine.Delete delete = indexShard.prepareDelete(deleteRequest.type(), deleteRequest.id(), deleteRequest.version(), deleteRequest.versionType(), Engine.Operation.Origin.PRIMARY);
         indexShard.delete(delete);
         // update the request with the version so it will go to the replicas
@@ -451,7 +346,7 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
         assert deleteRequest.versionType().validateVersionForWrites(deleteRequest.version());
 
         DeleteResponse deleteResponse = new DeleteResponse(request.index(), deleteRequest.type(), deleteRequest.id(), delete.version(), delete.found());
-        return new WriteResult(deleteResponse, null, null);
+        return new WriteResult(deleteResponse, delete.getTranslogLocation());
     }
 
     static class UpdateResult {
@@ -542,15 +437,16 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                 indexShard.indexingService().noopUpdate(updateRequest.type());
                 return new UpdateResult(translate, updateResponse);
             default:
-                throw new ElasticsearchIllegalStateException("Illegal update operation " + translate.operation());
+                throw new IllegalStateException("Illegal update operation " + translate.operation());
         }
     }
 
 
     @Override
-    protected void shardOperationOnReplica(ReplicaOperationRequest shardRequest) {
-        IndexShard indexShard = indicesService.indexServiceSafe(shardRequest.shardId.getIndex()).shardSafe(shardRequest.shardId.id());
-        final BulkShardRequest request = shardRequest.request;
+    protected void shardOperationOnReplica(ShardId shardId, BulkShardRequest request) {
+        IndexService indexService = indicesService.indexServiceSafe(shardId.getIndex());
+        IndexShard indexShard = indexService.shardSafe(shardId.id());
+        Translog.Location location = null;
         for (int i = 0; i < request.items().length; i++) {
             BulkItemRequest item = request.items()[i];
             if (item == null || item.isIgnoreOnReplica()) {
@@ -562,15 +458,21 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                     SourceToParse sourceToParse = SourceToParse.source(SourceToParse.Origin.REPLICA, indexRequest.source()).type(indexRequest.type()).id(indexRequest.id())
                             .routing(indexRequest.routing()).parent(indexRequest.parent()).timestamp(indexRequest.timestamp()).ttl(indexRequest.ttl());
 
+                    final Engine.IndexingOperation operation;
                     if (indexRequest.opType() == IndexRequest.OpType.INDEX) {
-                        Engine.Index index = indexShard.prepareIndex(sourceToParse, indexRequest.version(), indexRequest.versionType(), Engine.Operation.Origin.REPLICA, request.canHaveDuplicates() || indexRequest.canHaveDuplicates());
-                        indexShard.index(index);
+                        operation = indexShard.prepareIndex(sourceToParse, indexRequest.version(), indexRequest.versionType(), Engine.Operation.Origin.REPLICA, request.canHaveDuplicates() || indexRequest.canHaveDuplicates());
                     } else {
-                        Engine.Create create = indexShard.prepareCreate(sourceToParse,
+                        assert indexRequest.opType() == IndexRequest.OpType.CREATE : indexRequest.opType();
+                        operation = indexShard.prepareCreate(sourceToParse,
                                 indexRequest.version(), indexRequest.versionType(),
                                 Engine.Operation.Origin.REPLICA, request.canHaveDuplicates() || indexRequest.canHaveDuplicates(), indexRequest.autoGeneratedId());
-                        indexShard.create(create);
                     }
+                    Mapping update = operation.parsedDoc().dynamicMappingsUpdate();
+                    if (update != null) {
+                        throw new RetryOnReplicaException(shardId, "Mappings are not available on the replica yet, triggered update: " + update);
+                    }
+                    operation.execute(indexShard);
+                    location = locationToSync(location, operation.getTranslogLocation());
                 } catch (Throwable e) {
                     // if its not an ignore replica failure, we need to make sure to bubble up the failure
                     // so we will fail the shard
@@ -583,6 +485,7 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                 try {
                     Engine.Delete delete = indexShard.prepareDelete(deleteRequest.type(), deleteRequest.id(), deleteRequest.version(), deleteRequest.versionType(), Engine.Operation.Origin.REPLICA);
                     indexShard.delete(delete);
+                    location = locationToSync(location, delete.getTranslogLocation());
                 } catch (Throwable e) {
                     // if its not an ignore replica failure, we need to make sure to bubble up the failure
                     // so we will fail the shard
@@ -590,15 +493,25 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
                         throw e;
                     }
                 }
+            } else {
+                throw new IllegalStateException("Unexpected index operation: " + item.request());
             }
         }
 
+       processAfter(request, indexShard, location);
+    }
+
+    private void processAfter(BulkShardRequest request, IndexShard indexShard, Translog.Location location) {
         if (request.refresh()) {
             try {
                 indexShard.refresh("refresh_flag_bulk");
             } catch (Throwable e) {
                 // ignore
             }
+        }
+
+        if (indexShard.getTranslogDurability() == Translog.Durabilty.REQUEST && location != null) {
+            indexShard.sync(location);
         }
     }
 
@@ -612,5 +525,16 @@ public class TransportShardBulkAction extends TransportShardReplicationOperation
         } else {
             // log?
         }
+    }
+
+    private Translog.Location locationToSync(Translog.Location current, Translog.Location next) {
+        /* here we are moving forward in the translog with each operation. Under the hood
+         * this might cross translog files which is ok since from the user perspective
+         * the translog is like a tape where only the highest location needs to be fsynced
+         * in order to sync all previous locations even though they are not in the same file.
+         * When the translog rolls over files the previous file is fsynced on after closing if needed.*/
+        assert next != null : "next operation can't be null";
+        assert current == null || current.compareTo(next) < 0 : "translog locations are not increasing";
+        return next;
     }
 }

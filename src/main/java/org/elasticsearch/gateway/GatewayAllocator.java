@@ -28,6 +28,7 @@ import com.google.common.collect.Sets;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.FailedNodeException;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.MetaData;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.routing.MutableShardRouting;
@@ -106,6 +107,7 @@ public class GatewayAllocator extends AbstractComponent {
         RoutingNodes routingNodes = allocation.routingNodes();
 
         // First, handle primaries, they must find a place to be allocated on here
+        MetaData metaData = routingNodes.metaData();
         Iterator<MutableShardRouting> unassignedIterator = routingNodes.unassigned().iterator();
         while (unassignedIterator.hasNext()) {
             MutableShardRouting shard = unassignedIterator.next();
@@ -118,8 +120,8 @@ public class GatewayAllocator extends AbstractComponent {
             if (!routingNodes.routingTable().index(shard.index()).shard(shard.id()).primaryAllocatedPostApi()) {
                 continue;
             }
-            final String indexUUID = allocation.metaData().index(shard.index()).getUUID();
-            ObjectLongOpenHashMap<DiscoveryNode> nodesState = buildShardStates(nodes, shard, indexUUID);
+
+            ObjectLongOpenHashMap<DiscoveryNode> nodesState = buildShardStates(nodes, shard, metaData.index(shard.index()));
 
             int numberOfAllocationsFound = 0;
             long highestVersion = -1;
@@ -370,7 +372,15 @@ public class GatewayAllocator extends AbstractComponent {
         return changed;
     }
 
-    private ObjectLongOpenHashMap<DiscoveryNode> buildShardStates(final DiscoveryNodes nodes, MutableShardRouting shard, String indexUUID) {
+    /**
+     * Build a map of DiscoveryNodes to shard state number for the given shard.
+     * A state of -1 means the shard does not exist on the node, where any
+     * shard state >= 0 is the state version of the shard on that node's disk.
+     *
+     * A shard on shared storage will return at least shard state 0 for all
+     * nodes, indicating that the shard can be allocated to any node.
+     */
+    private ObjectLongOpenHashMap<DiscoveryNode> buildShardStates(final DiscoveryNodes nodes, MutableShardRouting shard, IndexMetaData indexMetaData) {
         ObjectLongOpenHashMap<DiscoveryNode> shardStates = cachedShardsState.get(shard.shardId());
         ObjectOpenHashSet<String> nodeIds;
         if (shardStates == null) {
@@ -399,14 +409,22 @@ public class GatewayAllocator extends AbstractComponent {
         }
 
         String[] nodesIdsArray = nodeIds.toArray(String.class);
-        TransportNodesListGatewayStartedShards.NodesGatewayStartedShards response = listGatewayStartedShards.list(shard.shardId(), indexUUID, nodesIdsArray, listTimeout).actionGet();
+        TransportNodesListGatewayStartedShards.NodesGatewayStartedShards response = listGatewayStartedShards.list(shard.shardId(), indexMetaData.getUUID(), nodesIdsArray, listTimeout).actionGet();
         logListActionFailures(shard, "state", response.failures());
 
         for (TransportNodesListGatewayStartedShards.NodeGatewayStartedShards nodeShardState : response) {
+            long version = nodeShardState.version();
+            Settings idxSettings = indexMetaData.settings();
+            if (IndexMetaData.isOnSharedFilesystem(idxSettings) &&
+                    idxSettings.getAsBoolean(IndexMetaData.SETTING_SHARED_FS_ALLOW_RECOVERY_ON_ANY_NODE, false)) {
+                // Shared filesystems use 0 as a minimum shard state, which
+                // means that the shard can be allocated to any node
+                version = Math.max(0, version);
+            }
             // -1 version means it does not exists, which is what the API returns, and what we expect to
             logger.trace("[{}] on node [{}] has version [{}] of shard",
-                    shard, nodeShardState.getNode(), nodeShardState.version());
-            shardStates.put(nodeShardState.getNode(), nodeShardState.version());
+                    shard, nodeShardState.getNode(), version);
+            shardStates.put(nodeShardState.getNode(), version);
         }
         return shardStates;
     }

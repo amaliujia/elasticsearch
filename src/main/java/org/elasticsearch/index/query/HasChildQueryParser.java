@@ -20,12 +20,14 @@
 package org.elasticsearch.index.query;
 
 import org.apache.lucene.search.Filter;
-import org.apache.lucene.search.FilteredQuery;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.QueryWrapperFilter;
 import org.apache.lucene.search.join.BitDocIdSetFilter;
+import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.fielddata.plain.ParentChildIndexFieldData;
 import org.elasticsearch.index.mapper.DocumentMapper;
@@ -34,15 +36,11 @@ import org.elasticsearch.index.query.support.InnerHitsQueryParserHelper;
 import org.elasticsearch.index.query.support.XContentStructure;
 import org.elasticsearch.index.search.child.ChildrenConstantScoreQuery;
 import org.elasticsearch.index.search.child.ChildrenQuery;
-import org.elasticsearch.index.search.child.CustomQueryWrappingFilter;
 import org.elasticsearch.index.search.child.ScoreType;
-import org.elasticsearch.index.search.nested.NonNestedDocsFilter;
 import org.elasticsearch.search.fetch.innerhits.InnerHitsContext;
 import org.elasticsearch.search.internal.SubSearchContext;
 
 import java.io.IOException;
-
-import static org.elasticsearch.index.query.QueryParserUtils.ensureNotDeleteByQuery;
 
 /**
  *
@@ -50,6 +48,7 @@ import static org.elasticsearch.index.query.QueryParserUtils.ensureNotDeleteByQu
 public class HasChildQueryParser implements QueryParser {
 
     public static final String NAME = "has_child";
+    private static final ParseField QUERY_FIELD = new ParseField("query", "filter");
 
     private final InnerHitsQueryParserHelper innerHitsQueryParserHelper;
 
@@ -65,7 +64,6 @@ public class HasChildQueryParser implements QueryParser {
 
     @Override
     public Query parse(QueryParseContext parseContext) throws IOException, QueryParsingException {
-        ensureNotDeleteByQuery(NAME, parseContext);
         XContentParser parser = parseContext.parser();
 
         boolean queryFound = false;
@@ -84,18 +82,20 @@ public class HasChildQueryParser implements QueryParser {
         while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
             if (token == XContentParser.Token.FIELD_NAME) {
                 currentFieldName = parser.currentName();
+            } else if (parseContext.isDeprecatedSetting(currentFieldName)) {
+                // skip
             } else if (token == XContentParser.Token.START_OBJECT) {
                 // Usually, the query would be parsed here, but the child
                 // type may not have been extracted yet, so use the
                 // XContentStructure.<type> facade to parse if available,
                 // or delay parsing if not.
-                if ("query".equals(currentFieldName)) {
+                if (QUERY_FIELD.match(currentFieldName)) {
                     iq = new XContentStructure.InnerQuery(parseContext, childType == null ? null : new String[] { childType });
                     queryFound = true;
                 } else if ("inner_hits".equals(currentFieldName)) {
                     innerHits = innerHitsQueryParserHelper.parse(parseContext);
                 } else {
-                    throw new QueryParsingException(parseContext.index(), "[has_child] query does not support [" + currentFieldName + "]");
+                    throw new QueryParsingException(parseContext, "[has_child] query does not support [" + currentFieldName + "]");
                 }
             } else if (token.isValue()) {
                 if ("type".equals(currentFieldName) || "child_type".equals(currentFieldName) || "childType".equals(currentFieldName)) {
@@ -115,15 +115,15 @@ public class HasChildQueryParser implements QueryParser {
                 } else if ("_name".equals(currentFieldName)) {
                     queryName = parser.text();
                 } else {
-                    throw new QueryParsingException(parseContext.index(), "[has_child] query does not support [" + currentFieldName + "]");
+                    throw new QueryParsingException(parseContext, "[has_child] query does not support [" + currentFieldName + "]");
                 }
             }
         }
         if (!queryFound) {
-            throw new QueryParsingException(parseContext.index(), "[has_child] requires 'query' field");
+            throw new QueryParsingException(parseContext, "[has_child] requires 'query' field");
         }
         if (childType == null) {
-            throw new QueryParsingException(parseContext.index(), "[has_child] requires 'type' field");
+            throw new QueryParsingException(parseContext, "[has_child] requires 'type' field");
         }
 
         Query innerQuery = iq.asQuery(childType);
@@ -135,10 +135,10 @@ public class HasChildQueryParser implements QueryParser {
 
         DocumentMapper childDocMapper = parseContext.mapperService().documentMapper(childType);
         if (childDocMapper == null) {
-            throw new QueryParsingException(parseContext.index(), "[has_child] No mapping for for type [" + childType + "]");
+            throw new QueryParsingException(parseContext, "[has_child] No mapping for for type [" + childType + "]");
         }
         if (!childDocMapper.parentFieldMapper().active()) {
-            throw new QueryParsingException(parseContext.index(), "[has_child]  Type [" + childType + "] does not have parent mapping");
+            throw new QueryParsingException(parseContext, "[has_child]  Type [" + childType + "] does not have parent mapping");
         }
 
         if (innerHits != null) {
@@ -149,30 +149,31 @@ public class HasChildQueryParser implements QueryParser {
 
         ParentFieldMapper parentFieldMapper = childDocMapper.parentFieldMapper();
         if (!parentFieldMapper.active()) {
-            throw new QueryParsingException(parseContext.index(), "[has_child] _parent field not configured");
+            throw new QueryParsingException(parseContext, "[has_child] _parent field not configured");
         }
 
         String parentType = parentFieldMapper.type();
         DocumentMapper parentDocMapper = parseContext.mapperService().documentMapper(parentType);
         if (parentDocMapper == null) {
-            throw new QueryParsingException(parseContext.index(), "[has_child]  Type [" + childType
-                    + "] points to a non existent parent type [" + parentType + "]");
+            throw new QueryParsingException(parseContext, "[has_child]  Type [" + childType + "] points to a non existent parent type ["
+                    + parentType + "]");
         }
 
         if (maxChildren > 0 && maxChildren < minChildren) {
-            throw new QueryParsingException(parseContext.index(), "[has_child] 'max_children' is less than 'min_children'");
+            throw new QueryParsingException(parseContext, "[has_child] 'max_children' is less than 'min_children'");
         }
 
         BitDocIdSetFilter nonNestedDocsFilter = null;
         if (parentDocMapper.hasNestedObjects()) {
-            nonNestedDocsFilter = parseContext.bitsetFilter(NonNestedDocsFilter.INSTANCE);
+            nonNestedDocsFilter = parseContext.bitsetFilter(Queries.newNonNestedFilter());
         }
 
         // wrap the query with type query
-        innerQuery = new FilteredQuery(innerQuery, parseContext.cacheFilter(childDocMapper.typeFilter(), null, parseContext.autoFilterCachePolicy()));
+        innerQuery = Queries.filtered(innerQuery, childDocMapper.typeFilter());
 
         Query query;
-        Filter parentFilter = parseContext.cacheFilter(parentDocMapper.typeFilter(), null, parseContext.autoFilterCachePolicy());
+        // TODO: use the query API
+        Filter parentFilter = new QueryWrapperFilter(parentDocMapper.typeFilter());
         ParentChildIndexFieldData parentChildIndexFieldData = parseContext.getForField(parentFieldMapper);
         if (minChildren > 1 || maxChildren > 0 || scoreType != ScoreType.NONE) {
             query = new ChildrenQuery(parentChildIndexFieldData, parentType, childType, parentFilter, innerQuery, scoreType, minChildren,
@@ -182,7 +183,7 @@ public class HasChildQueryParser implements QueryParser {
                     shortCircuitParentDocSet, nonNestedDocsFilter);
         }
         if (queryName != null) {
-            parseContext.addNamedFilter(queryName, new CustomQueryWrappingFilter(query));
+            parseContext.addNamedQuery(queryName, query);
         }
         query.setBoost(boost);
         return query;

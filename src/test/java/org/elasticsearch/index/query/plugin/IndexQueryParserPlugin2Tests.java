@@ -29,6 +29,8 @@ import org.elasticsearch.common.inject.util.Providers;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsModule;
+import org.elasticsearch.env.Environment;
+import org.elasticsearch.env.EnvironmentModule;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexNameModule;
 import org.elasticsearch.index.analysis.AnalysisModule;
@@ -56,16 +58,19 @@ public class IndexQueryParserPlugin2Tests extends ElasticsearchTestCase {
 
     @Test
     public void testCustomInjection() throws InterruptedException {
-        Settings settings = ImmutableSettings.builder().put("name", "testCustomInjection").put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT).build();
+        Settings settings = ImmutableSettings.builder()
+            .put("name", "testCustomInjection")
+            .put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT)
+            .put("path.home", createTempDir()).build();
 
         IndexQueryParserModule queryParserModule = new IndexQueryParserModule(settings);
         queryParserModule.addQueryParser("my", PluginJsonQueryParser.class);
-        queryParserModule.addFilterParser("my", PluginJsonFilterParser.class);
 
         Index index = new Index("test");
         Injector injector = new ModulesBuilder().add(
+                new EnvironmentModule(new Environment(settings)),
                 new SettingsModule(settings),
-                new ThreadPoolModule(settings),
+                new ThreadPoolModule(new ThreadPool(settings)),
                 new IndicesQueriesModule(),
                 new ScriptModule(settings),
                 new IndexSettingsModule(index, settings),
@@ -89,9 +94,6 @@ public class IndexQueryParserPlugin2Tests extends ElasticsearchTestCase {
         PluginJsonQueryParser myJsonQueryParser = (PluginJsonQueryParser) indexQueryParserService.queryParser("my");
 
         assertThat(myJsonQueryParser.names()[0], equalTo("my"));
-
-        PluginJsonFilterParser myJsonFilterParser = (PluginJsonFilterParser) indexQueryParserService.filterParser("my");
-        assertThat(myJsonFilterParser.names()[0], equalTo("my"));
 
         terminate(injector.getInstance(ThreadPool.class));
     }

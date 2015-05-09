@@ -21,7 +21,6 @@ package org.elasticsearch.index.query;
 import java.util.Locale;
 
 import org.apache.lucene.util.automaton.RegExp;
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.common.Strings;
 
 /**
@@ -37,7 +36,7 @@ import org.elasticsearch.common.Strings;
  * </ul>
  *
  * @see RegexpQueryBuilder#flags(RegexpFlag...)
- * @see RegexpFilterBuilder#flags(RegexpFlag...)
+ * @see RegexpQueryBuilder#flags(RegexpFlag...)
  */
 public enum RegexpFlag {
 
@@ -128,7 +127,7 @@ public enum RegexpFlag {
                 }
                 magic |= flag.value();
             } catch (IllegalArgumentException iae) {
-                throw new ElasticsearchIllegalArgumentException("Unknown regexp flag [" + s + "]");
+                throw new IllegalArgumentException("Unknown regexp flag [" + s + "]");
             }
         }
         return magic;

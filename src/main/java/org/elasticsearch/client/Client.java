@@ -19,7 +19,8 @@
 
 package org.elasticsearch.client;
 
-import org.elasticsearch.action.*;
+import org.elasticsearch.action.ActionFuture;
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.bulk.BulkRequestBuilder;
 import org.elasticsearch.action.bulk.BulkResponse;
@@ -29,15 +30,15 @@ import org.elasticsearch.action.count.CountResponse;
 import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.action.delete.DeleteRequestBuilder;
 import org.elasticsearch.action.delete.DeleteResponse;
-import org.elasticsearch.action.deletebyquery.DeleteByQueryRequest;
-import org.elasticsearch.action.deletebyquery.DeleteByQueryRequestBuilder;
-import org.elasticsearch.action.deletebyquery.DeleteByQueryResponse;
 import org.elasticsearch.action.exists.ExistsRequest;
 import org.elasticsearch.action.exists.ExistsRequestBuilder;
 import org.elasticsearch.action.exists.ExistsResponse;
 import org.elasticsearch.action.explain.ExplainRequest;
 import org.elasticsearch.action.explain.ExplainRequestBuilder;
 import org.elasticsearch.action.explain.ExplainResponse;
+import org.elasticsearch.action.fieldstats.FieldStatsRequest;
+import org.elasticsearch.action.fieldstats.FieldStatsRequestBuilder;
+import org.elasticsearch.action.fieldstats.FieldStatsResponse;
 import org.elasticsearch.action.get.*;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexRequestBuilder;
@@ -51,8 +52,6 @@ import org.elasticsearch.action.indexedscripts.get.GetIndexedScriptResponse;
 import org.elasticsearch.action.indexedscripts.put.PutIndexedScriptRequest;
 import org.elasticsearch.action.indexedscripts.put.PutIndexedScriptRequestBuilder;
 import org.elasticsearch.action.indexedscripts.put.PutIndexedScriptResponse;
-import org.elasticsearch.action.mlt.MoreLikeThisRequest;
-import org.elasticsearch.action.mlt.MoreLikeThisRequestBuilder;
 import org.elasticsearch.action.percolate.*;
 import org.elasticsearch.action.search.*;
 import org.elasticsearch.action.suggest.SuggestRequest;
@@ -62,6 +61,7 @@ import org.elasticsearch.action.termvectors.*;
 import org.elasticsearch.action.update.UpdateRequest;
 import org.elasticsearch.action.update.UpdateRequestBuilder;
 import org.elasticsearch.action.update.UpdateResponse;
+import org.elasticsearch.client.support.Headers;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.settings.Settings;
@@ -79,7 +79,7 @@ import org.elasticsearch.common.settings.Settings;
  * @see org.elasticsearch.node.Node#client()
  * @see org.elasticsearch.client.transport.TransportClient
  */
-public interface Client extends ElasticsearchClient<Client>, Releasable {
+public interface Client extends ElasticsearchClient, Releasable {
 
     String CLIENT_TYPE_SETTING = "client.type";
 
@@ -221,29 +221,6 @@ public interface Client extends ElasticsearchClient<Client>, Releasable {
     BulkRequestBuilder prepareBulk();
 
     /**
-     * Deletes all documents from one or more indices based on a query.
-     *
-     * @param request The delete by query request
-     * @return The result future
-     * @see Requests#deleteByQueryRequest(String...)
-     */
-    ActionFuture<DeleteByQueryResponse> deleteByQuery(DeleteByQueryRequest request);
-
-    /**
-     * Deletes all documents from one or more indices based on a query.
-     *
-     * @param request  The delete by query request
-     * @param listener A listener to be notified with a result
-     * @see Requests#deleteByQueryRequest(String...)
-     */
-    void deleteByQuery(DeleteByQueryRequest request, ActionListener<DeleteByQueryResponse> listener);
-
-    /**
-     * Deletes all documents from one or more indices based on a query.
-     */
-    DeleteByQueryRequestBuilder prepareDeleteByQuery(String... indices);
-
-    /**
      * Gets the document that was indexed from an index with a type and id.
      *
      * @param request The get request
@@ -279,18 +256,11 @@ public interface Client extends ElasticsearchClient<Client>, Releasable {
 
     /**
      * Put the indexed script
-     * @param scriptLang
-     * @param id
-     * @param source
-     * @return
      */
     PutIndexedScriptRequestBuilder preparePutIndexedScript(@Nullable String scriptLang, String id, String source);
 
     /**
      * delete an indexed script
-     *
-     * @param request
-     * @param listener
      */
     void deleteIndexedScript(DeleteIndexedScriptRequest request, ActionListener<DeleteIndexedScriptResponse> listener);
 
@@ -310,17 +280,11 @@ public interface Client extends ElasticsearchClient<Client>, Releasable {
 
     /**
      * Delete an indexed script
-     * @param scriptLang
-     * @param id
-     * @return
      */
     DeleteIndexedScriptRequestBuilder prepareDeleteIndexedScript(@Nullable String scriptLang, String id);
 
     /**
      * Put an indexed script
-     *
-     * @param request
-     * @param listener
      */
     void putIndexedScript(PutIndexedScriptRequest request, ActionListener<PutIndexedScriptResponse> listener);
 
@@ -340,17 +304,11 @@ public interface Client extends ElasticsearchClient<Client>, Releasable {
 
     /**
      * Get the indexed script
-     * @param scriptLang
-     * @param id
-     * @return
      */
     GetIndexedScriptRequestBuilder prepareGetIndexedScript(@Nullable String scriptLang, String id);
 
     /**
      * Get an indexed script
-     *
-     * @param request
-     * @param listener
      */
     void getIndexedScript(GetIndexedScriptRequest request, ActionListener<GetIndexedScriptResponse> listener);
 
@@ -508,32 +466,7 @@ public interface Client extends ElasticsearchClient<Client>, Releasable {
      * Performs multiple search requests.
      */
     MultiSearchRequestBuilder prepareMultiSearch();
-
-    /**
-     * A more like this action to search for documents that are "like" a specific document.
-     *
-     * @param request The more like this request
-     * @return The response future
-     */
-    ActionFuture<SearchResponse> moreLikeThis(MoreLikeThisRequest request);
-
-    /**
-     * A more like this action to search for documents that are "like" a specific document.
-     *
-     * @param request  The more like this request
-     * @param listener A listener to be notified of the result
-     */
-    void moreLikeThis(MoreLikeThisRequest request, ActionListener<SearchResponse> listener);
-
-    /**
-     * A more like this action to search for documents that are "like" a specific document.
-     *
-     * @param index The index to load the document from
-     * @param type  The type of the document
-     * @param id    The id of the document
-     */
-    MoreLikeThisRequestBuilder prepareMoreLikeThis(String index, String type, String id);
-
+    
     /**
      * An action that returns the term vectors for a specific document.
      *
@@ -682,9 +615,16 @@ public interface Client extends ElasticsearchClient<Client>, Releasable {
      */
     void clearScroll(ClearScrollRequest request, ActionListener<ClearScrollResponse> listener);
 
+    FieldStatsRequestBuilder prepareFieldStats();
+
+    ActionFuture<FieldStatsResponse> fieldStats(FieldStatsRequest request);
+
+    void fieldStats(FieldStatsRequest request, ActionListener<FieldStatsResponse> listener);
+
     /**
      * Returns this clients settings
      */
     Settings settings();
 
+    Headers headers();
 }

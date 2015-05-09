@@ -28,14 +28,34 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.document.DoubleField;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StringField;
-import org.apache.lucene.index.*;
-import org.apache.lucene.queries.TermFilter;
-import org.apache.lucene.search.*;
+import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReader;
+import org.apache.lucene.index.PostingsEnum;
+import org.apache.lucene.index.RandomIndexWriter;
+import org.apache.lucene.index.SlowCompositeReaderWrapper;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.LeafCollector;
+import org.apache.lucene.search.MultiCollector;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.QueryUtils;
+import org.apache.lucene.search.QueryWrapperFilter;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.search.TopScoreDocCollector;
 import org.apache.lucene.search.join.BitDocIdSetFilter;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.LuceneTestCase;
 import org.elasticsearch.common.lease.Releasables;
+import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.fielddata.plain.ParentChildIndexFieldData;
 import org.elasticsearch.index.mapper.Uid;
@@ -45,7 +65,6 @@ import org.elasticsearch.index.mapper.internal.TypeFieldMapper;
 import org.elasticsearch.index.mapper.internal.UidFieldMapper;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.functionscore.fieldvaluefactor.FieldValueFactorFunctionBuilder;
-import org.elasticsearch.index.search.nested.NonNestedDocsFilter;
 import org.elasticsearch.search.internal.ContextIndexSearcher;
 import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.test.TestSearchContext;
@@ -54,10 +73,19 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.Locale;
+import java.util.Map;
+import java.util.NavigableMap;
+import java.util.Random;
+import java.util.TreeMap;
 
-import static org.elasticsearch.index.query.FilterBuilders.*;
-import static org.elasticsearch.index.query.QueryBuilders.*;
+import static org.elasticsearch.index.query.QueryBuilders.constantScoreQuery;
+import static org.elasticsearch.index.query.QueryBuilders.filteredQuery;
+import static org.elasticsearch.index.query.QueryBuilders.functionScoreQuery;
+import static org.elasticsearch.index.query.QueryBuilders.hasChildQuery;
+import static org.elasticsearch.index.query.QueryBuilders.notQuery;
+import static org.elasticsearch.index.query.QueryBuilders.termQuery;
+import static org.elasticsearch.index.query.QueryBuilders.typeQuery;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
 
@@ -65,7 +93,6 @@ public class ChildrenQueryTests extends AbstractChildTests {
 
     @BeforeClass
     public static void before() throws IOException {
-        forceDefaultCodec();
         SearchContext.setCurrent(createSearchContext("test", "parent", "child"));
     }
 
@@ -82,11 +109,11 @@ public class ChildrenQueryTests extends AbstractChildTests {
         ScoreType scoreType = ScoreType.values()[random().nextInt(ScoreType.values().length)];
         ParentFieldMapper parentFieldMapper = SearchContext.current().mapperService().documentMapper("child").parentFieldMapper();
         ParentChildIndexFieldData parentChildIndexFieldData = SearchContext.current().fieldData().getForField(parentFieldMapper);
-        BitDocIdSetFilter parentFilter = wrapWithBitSetFilter(new TermFilter(new Term(TypeFieldMapper.NAME, "parent")));
+        BitDocIdSetFilter parentFilter = wrapWithBitSetFilter(new QueryWrapperFilter(new TermQuery(new Term(TypeFieldMapper.NAME, "parent"))));
         int minChildren = random().nextInt(10);
         int maxChildren = scaledRandomIntBetween(minChildren, 10);
         Query query = new ChildrenQuery(parentChildIndexFieldData, "parent", "child", parentFilter, childQuery, scoreType, minChildren,
-                maxChildren, 12, wrapWithBitSetFilter(NonNestedDocsFilter.INSTANCE));
+                maxChildren, 12, wrapWithBitSetFilter(Queries.newNonNestedFilter()));
         QueryUtils.check(query);
     }
 
@@ -213,7 +240,7 @@ public class ChildrenQueryTests extends AbstractChildTests {
                     .maxChildren(maxChildren)
                     .setShortCircuitCutoff(shortCircuitParentDocSet);
             // Using a FQ, will invoke / test the Scorer#advance(..) and also let the Weight#scorer not get live docs as acceptedDocs
-            queryBuilder = filteredQuery(queryBuilder, notFilter(termFilter("filter", "me")));
+            queryBuilder = filteredQuery(queryBuilder, notQuery(termQuery("filter", "me")));
             Query query = parseQuery(queryBuilder);
             BitSetCollector collector = new BitSetCollector(indexReader.maxDoc());
             int numHits = 1 + random().nextInt(25);
@@ -229,7 +256,7 @@ public class ChildrenQueryTests extends AbstractChildTests {
                 Terms terms = slowLeafReader.terms(UidFieldMapper.NAME);
                 if (terms != null) {
                     NavigableMap<String, FloatArrayList> parentIdToChildScores = childValueToParentIds.lget();
-                    TermsEnum termsEnum = terms.iterator(null);
+                    TermsEnum termsEnum = terms.iterator();
                     PostingsEnum docsEnum = null;
                     for (Map.Entry<String, FloatArrayList> entry : parentIdToChildScores.entrySet()) {
                         int count = entry.getValue().elementsCount;
@@ -361,13 +388,14 @@ public class ChildrenQueryTests extends AbstractChildTests {
         ((TestSearchContext)context).setSearcher(new ContextIndexSearcher(context, engineSearcher));
 
         // child query that returns the score as the value of "childScore" for each child document, with the parent's score determined by the score type
-        QueryBuilder childQueryBuilder = functionScoreQuery(typeFilter("child")).add(new FieldValueFactorFunctionBuilder(CHILD_SCORE_NAME));
+        QueryBuilder childQueryBuilder = functionScoreQuery(typeQuery("child")).add(new FieldValueFactorFunctionBuilder(CHILD_SCORE_NAME));
         QueryBuilder queryBuilder = hasChildQuery("child", childQueryBuilder)
                 .scoreType(scoreType.name().toLowerCase(Locale.ENGLISH))
                 .setShortCircuitCutoff(parentDocs);
 
         // Perform the search for the documents using the selected score type
-        TopDocs docs = searcher.search(parseQuery(queryBuilder), parentDocs);
+        Query query = parseQuery(queryBuilder);
+        TopDocs docs = searcher.search(query, parentDocs);
         assertThat("Expected all parents", docs.totalHits, is(parentDocs));
 
         // score should be descending (just a sanity check)

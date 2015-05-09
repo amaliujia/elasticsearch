@@ -20,13 +20,13 @@
 package org.elasticsearch.common.geo.builders;
 
 import com.spatial4j.core.context.jts.JtsSpatialContext;
+import com.spatial4j.core.exception.InvalidShapeException;
 import com.spatial4j.core.shape.Shape;
 import com.spatial4j.core.shape.jts.JtsGeometry;
 import com.vividsolutions.jts.geom.Coordinate;
 import com.vividsolutions.jts.geom.Geometry;
 import com.vividsolutions.jts.geom.GeometryFactory;
 import org.apache.commons.lang3.tuple.Pair;
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.ESLoggerFactory;
@@ -250,9 +250,12 @@ public abstract class ShapeBuilder implements ToXContent {
             token = parser.nextToken();
             double lat = parser.doubleValue();
             token = parser.nextToken();
+            while (token == XContentParser.Token.VALUE_NUMBER) {
+                token = parser.nextToken();
+            }
             return new CoordinateNode(new Coordinate(lon, lat));
         } else if (token == XContentParser.Token.VALUE_NULL) {
-            throw new ElasticsearchIllegalArgumentException("coordinates cannot contain NULL values)");
+            throw new IllegalArgumentException("coordinates cannot contain NULL values)");
         }
 
         List<CoordinateNode> nodes = new ArrayList<>();
@@ -446,7 +449,8 @@ public abstract class ShapeBuilder implements ToXContent {
 
         protected Edge(Coordinate coordinate, Edge next, Coordinate intersection) {
             this.coordinate = coordinate;
-            this.next = next;
+            // use setter to catch duplicate point cases
+            this.setNext(next);
             this.intersect = intersection;
             if (next != null) {
                 this.component = next.component;
@@ -455,6 +459,17 @@ public abstract class ShapeBuilder implements ToXContent {
 
         protected Edge(Coordinate coordinate, Edge next) {
             this(coordinate, next, Edge.MAX_COORDINATE);
+        }
+
+        protected void setNext(Edge next) {
+            // don't bother setting next if its null
+            if (next != null) {
+                // self-loop throws an invalid shape
+                if (this.coordinate.equals(next.coordinate)) {
+                    throw new InvalidShapeException("Provided shape has duplicate consecutive coordinates at: " + this.coordinate);
+                }
+                this.next = next;
+            }
         }
 
         private static final int top(Coordinate[] points, int offset, int length) {
@@ -522,17 +537,19 @@ public abstract class ShapeBuilder implements ToXContent {
                 if (direction) {
                     edges[edgeOffset + i] = new Edge(points[pointOffset + i], edges[edgeOffset + i - 1]);
                     edges[edgeOffset + i].component = component;
-                } else {
+                } else if(!edges[edgeOffset + i - 1].coordinate.equals(points[pointOffset + i])) {
                     edges[edgeOffset + i - 1].next = edges[edgeOffset + i] = new Edge(points[pointOffset + i], null);
                     edges[edgeOffset + i - 1].component = component;
+                } else {
+                    throw new InvalidShapeException("Provided shape has duplicate consecutive coordinates at: " + points[pointOffset + i]);
                 }
             }
 
             if (direction) {
-                edges[edgeOffset].next = edges[edgeOffset + length - 1];
+                edges[edgeOffset].setNext(edges[edgeOffset + length - 1]);
                 edges[edgeOffset].component = component;
             } else {
-                edges[edgeOffset + length - 1].next = edges[edgeOffset];
+                edges[edgeOffset + length - 1].setNext(edges[edgeOffset]);
                 edges[edgeOffset + length - 1].component = component;
             }
 
@@ -685,7 +702,7 @@ public abstract class ShapeBuilder implements ToXContent {
                     return type;
                 }
             }
-            throw new ElasticsearchIllegalArgumentException("unknown geo_shape ["+geoshapename+"]");
+            throw new IllegalArgumentException("unknown geo_shape ["+geoshapename+"]");
         }
 
         public static ShapeBuilder parse(XContentParser parser) throws IOException {

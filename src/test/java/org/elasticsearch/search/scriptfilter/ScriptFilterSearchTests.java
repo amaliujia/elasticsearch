@@ -20,13 +20,11 @@
 package org.elasticsearch.search.scriptfilter;
 
 import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.index.cache.filter.AutoFilterCachingPolicy;
 import org.elasticsearch.index.cache.filter.FilterCacheModule;
-import org.elasticsearch.index.cache.filter.weighted.WeightedFilterCache;
-import org.elasticsearch.script.groovy.GroovyScriptEngineService;
+import org.elasticsearch.index.cache.filter.FilterCacheModule.FilterCacheSettings;
+import org.elasticsearch.index.cache.filter.index.IndexFilterCache;
 import org.elasticsearch.search.sort.SortOrder;
 import org.elasticsearch.test.ElasticsearchIntegrationTest;
 import org.junit.Test;
@@ -34,9 +32,9 @@ import org.junit.Test;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.index.query.FilterBuilders.scriptFilter;
-import static org.elasticsearch.index.query.QueryBuilders.*;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
+import static org.elasticsearch.index.query.QueryBuilders.scriptQuery;
+import static org.elasticsearch.index.query.QueryBuilders.filteredQuery;
+import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
@@ -48,10 +46,9 @@ public class ScriptFilterSearchTests extends ElasticsearchIntegrationTest {
     @Override
     protected Settings nodeSettings(int nodeOrdinal) {
         return ImmutableSettings.settingsBuilder().put(super.nodeSettings(nodeOrdinal))
-                .put(GroovyScriptEngineService.GROOVY_SCRIPT_SANDBOX_ENABLED, false)
                 // aggressive filter caching so that we can assert on the number of iterations of the script filters
-                .put(FilterCacheModule.FilterCacheSettings.FILTER_CACHE_TYPE, WeightedFilterCache.class)
-                .put(AutoFilterCachingPolicy.AGGRESSIVE_CACHING_SETTINGS)
+                .put(FilterCacheModule.FilterCacheSettings.FILTER_CACHE_TYPE, IndexFilterCache.class)
+                .put(FilterCacheSettings.FILTER_CACHE_EVERYTHING, true)
                 .build();
     }
 
@@ -73,7 +70,7 @@ public class ScriptFilterSearchTests extends ElasticsearchIntegrationTest {
 
         logger.info("running doc['num1'].value > 1");
         SearchResponse response = client().prepareSearch()
-                .setQuery(filteredQuery(matchAllQuery(), scriptFilter("doc['num1'].value > 1")))
+                .setQuery(filteredQuery(matchAllQuery(), scriptQuery("doc['num1'].value > 1")))
                 .addSort("num1", SortOrder.ASC)
                 .addScriptField("sNum1", "doc['num1'].value")
                 .execute().actionGet();
@@ -86,7 +83,7 @@ public class ScriptFilterSearchTests extends ElasticsearchIntegrationTest {
 
         logger.info("running doc['num1'].value > param1");
         response = client().prepareSearch()
-                .setQuery(filteredQuery(matchAllQuery(), scriptFilter("doc['num1'].value > param1").addParam("param1", 2)))
+                .setQuery(filteredQuery(matchAllQuery(), scriptQuery("doc['num1'].value > param1").addParam("param1", 2)))
                 .addSort("num1", SortOrder.ASC)
                 .addScriptField("sNum1", "doc['num1'].value")
                 .execute().actionGet();
@@ -97,7 +94,7 @@ public class ScriptFilterSearchTests extends ElasticsearchIntegrationTest {
 
         logger.info("running doc['num1'].value > param1");
         response = client().prepareSearch()
-                .setQuery(filteredQuery(matchAllQuery(), scriptFilter("doc['num1'].value > param1").addParam("param1", -1)))
+                .setQuery(filteredQuery(matchAllQuery(), scriptQuery("doc['num1'].value > param1").addParam("param1", -1)))
                 .addSort("num1", SortOrder.ASC)
                 .addScriptField("sNum1", "doc['num1'].value")
                 .execute().actionGet();
@@ -115,58 +112,5 @@ public class ScriptFilterSearchTests extends ElasticsearchIntegrationTest {
 
     public static int incrementScriptCounter() {
         return scriptCounter.incrementAndGet();
-    }
-
-    @Test
-    public void testCustomScriptCache() throws Exception {
-        assertAcked(prepareCreate("test").setSettings(
-            ImmutableSettings.settingsBuilder()
-                //needs to run without replicas to validate caching behaviour and make sure we always hit the very shame shard
-                .put(indexSettings())
-                .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, 0)));
-        client().prepareIndex("test", "type1", "1").setSource(jsonBuilder().startObject().field("test", "1").field("num", 1.0f).endObject()).execute().actionGet();
-        flush();
-        client().prepareIndex("test", "type1", "2").setSource(jsonBuilder().startObject().field("test", "2").field("num", 2.0f).endObject()).execute().actionGet();
-        flush();
-        client().prepareIndex("test", "type1", "3").setSource(jsonBuilder().startObject().field("test", "3").field("num", 3.0f).endObject()).execute().actionGet();
-        flushAndRefresh();
-
-        String script = "org.elasticsearch.search.scriptfilter.ScriptFilterSearchTests.incrementScriptCounter() > 0";
-
-        scriptCounter.set(0);
-        logger.info("running script filter the first time");
-        SearchResponse response = client().prepareSearch()
-                .setQuery(filteredQuery(termQuery("test", "1"), scriptFilter(script).cache(true)))
-                .execute().actionGet();
-
-        assertThat(response.getHits().totalHits(), equalTo(1l));
-        assertThat(scriptCounter.get(), equalTo(3));
-
-        scriptCounter.set(0);
-        logger.info("running script filter the second time");
-        response = client().prepareSearch()
-                .setQuery(filteredQuery(termQuery("test", "2"), scriptFilter(script).cache(true)))
-                .execute().actionGet();
-
-        assertThat(response.getHits().totalHits(), equalTo(1l));
-        assertThat(scriptCounter.get(), equalTo(0));
-
-        scriptCounter.set(0);
-        logger.info("running script filter with new parameters");
-        response = client().prepareSearch()
-                .setQuery(filteredQuery(termQuery("test", "1"), scriptFilter(script).addParam("param1", "1").cache(true)))
-                .execute().actionGet();
-
-        assertThat(response.getHits().totalHits(), equalTo(1l));
-        assertThat(scriptCounter.get(), equalTo(3));
-
-        scriptCounter.set(0);
-        logger.info("running script filter with same parameters");
-        response = client().prepareSearch()
-                .setQuery(filteredQuery(matchAllQuery(), scriptFilter(script).addParam("param1", "1").cache(true)))
-                .execute().actionGet();
-
-        assertThat(response.getHits().totalHits(), equalTo(3l));
-        assertThat(scriptCounter.get(), equalTo(0));
     }
 }

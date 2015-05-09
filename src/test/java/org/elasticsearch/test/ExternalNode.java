@@ -21,12 +21,12 @@ package org.elasticsearch.test;
 import com.google.common.base.Predicate;
 
 import org.apache.lucene.util.Constants;
-import org.elasticsearch.Version;
 import org.elasticsearch.action.admin.cluster.node.info.NodeInfo;
 import org.elasticsearch.action.admin.cluster.node.info.NodesInfoResponse;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.transport.TransportClient;
 import org.elasticsearch.cluster.ClusterName;
+import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.ImmutableSettings;
@@ -127,7 +127,7 @@ final class ExternalNode implements Closeable {
             params.add("-Des." + entry.getKey() + "=" + entry.getValue());
         }
 
-        params.add("-Des.path.home=" + Paths.get(".").toAbsolutePath());
+        params.add("-Des.path.home=" + PathUtils.get(".").toAbsolutePath());
         params.add("-Des.path.conf=" + path + "/config");
 
         ProcessBuilder builder = new ProcessBuilder(params);
@@ -199,7 +199,7 @@ final class ExternalNode implements Closeable {
                     .put("client.transport.nodes_sampler_interval", "1s")
                     .put("name", "transport_client_" + nodeInfo.getNode().name())
                     .put(ClusterName.SETTING, clusterName).put("client.transport.sniff", false).build();
-            TransportClient client = new TransportClient(clientSettings);
+            TransportClient client = TransportClient.builder().settings(clientSettings).build();
             client.addTransportAddress(addr);
             this.client = client;
         }
@@ -211,16 +211,8 @@ final class ExternalNode implements Closeable {
     }
 
     synchronized void stop() {
-        stop(false);
-    }
-
-    synchronized void stop(boolean forceKill) {
         if (running()) {
             try {
-                if (forceKill == false && nodeInfo != null && random.nextBoolean()) {
-                    // sometimes shut down gracefully
-                    getClient().admin().cluster().prepareNodesShutdown(this.nodeInfo.getNode().id()).setExit(random.nextBoolean()).setDelay("0s").get();
-                }
                 if (this.client != null) {
                     client.close();
                 }

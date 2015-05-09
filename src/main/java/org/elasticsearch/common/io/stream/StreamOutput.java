@@ -28,6 +28,7 @@ import org.elasticsearch.common.text.Text;
 import org.joda.time.ReadableInstant;
 
 import java.io.IOException;
+import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -48,10 +49,6 @@ public abstract class StreamOutput extends OutputStream {
     public StreamOutput setVersion(Version version) {
         this.version = version;
         return this;
-    }
-
-    public boolean seekPositionSupported() {
-        return false;
     }
 
     public long position() throws IOException {
@@ -176,6 +173,15 @@ public abstract class StreamOutput extends OutputStream {
         }
     }
 
+    public void writeOptionalVInt(@Nullable Integer integer) throws IOException {
+        if (integer == null) {
+            writeBoolean(false);
+        } else {
+            writeBoolean(true);
+            writeVInt(integer);
+        }
+    }
+
     public void writeOptionalText(@Nullable Text text) throws IOException {
         if (text == null) {
             writeInt(-1);
@@ -273,6 +279,16 @@ public abstract class StreamOutput extends OutputStream {
     public void writeStringArray(String[] array) throws IOException {
         writeVInt(array.length);
         for (String s : array) {
+            writeString(s);
+        }
+    }
+
+    /**
+     * Write a list of strings. List can be empty but not {@code null}.
+     */
+    public void writeStringList(List<String> stringList) throws IOException {
+        writeVInt(stringList.size());
+        for (String s : stringList) {
             writeString(s);
         }
     }
@@ -379,6 +395,9 @@ public abstract class StreamOutput extends OutputStream {
         } else if (type == double[].class) {
             writeByte((byte) 20);
             writeDoubleArray((double[]) value);
+        } else if (value instanceof BytesRef) {
+            writeByte((byte) 21);
+            writeBytesRef((BytesRef) value);
         } else {
             throw new IOException("Can't write type [" + type + "]");
         }
@@ -390,21 +409,21 @@ public abstract class StreamOutput extends OutputStream {
             writeInt(value[i]);
         }
     }
-    
+
     public void writeLongArray(long[] value) throws IOException {
         writeVInt(value.length);
         for (int i=0; i<value.length; i++) {
             writeLong(value[i]);
         }
     }
-    
+
     public void writeFloatArray(float[] value) throws IOException {
         writeVInt(value.length);
         for (int i=0; i<value.length; i++) {
             writeFloat(value[i]);
         }
     }
-    
+
     public void writeDoubleArray(double[] value) throws IOException {
         writeVInt(value.length);
         for (int i=0; i<value.length; i++) {
@@ -422,5 +441,11 @@ public abstract class StreamOutput extends OutputStream {
         } else {
             writeBoolean(false);
         }
+    }
+
+    public void writeThrowable(Throwable throwable) throws IOException {
+        ObjectOutputStream out = new ObjectOutputStream(this);
+        out.writeObject(throwable);
+        out.flush();
     }
 }

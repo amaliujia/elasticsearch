@@ -19,7 +19,9 @@
 package org.elasticsearch.search.aggregations;
 
 import org.apache.lucene.index.LeafReaderContext;
+import org.elasticsearch.search.aggregations.bucket.BestBucketsDeferringCollector;
 import org.elasticsearch.search.aggregations.bucket.DeferringBucketCollector;
+import org.elasticsearch.search.aggregations.reducers.Reducer;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.internal.SearchContext.Lifetime;
 import org.elasticsearch.search.query.QueryPhaseExecutionException;
@@ -45,6 +47,7 @@ public abstract class AggregatorBase extends Aggregator {
 
     private Map<String, Aggregator> subAggregatorbyName;
     private DeferringBucketCollector recordingWrapper;
+    private final List<Reducer> reducers;
 
     /**
      * Constructs a new Aggregator.
@@ -55,8 +58,10 @@ public abstract class AggregatorBase extends Aggregator {
      * @param parent                The parent aggregator (may be {@code null} for top level aggregators)
      * @param metaData              The metaData associated with this aggregator
      */
-    protected AggregatorBase(String name, AggregatorFactories factories, AggregationContext context, Aggregator parent, Map<String, Object> metaData) throws IOException {
+    protected AggregatorBase(String name, AggregatorFactories factories, AggregationContext context, Aggregator parent,
+            List<Reducer> reducers, Map<String, Object> metaData) throws IOException {
         this.name = name;
+        this.reducers = reducers;
         this.metaData = metaData;
         this.parent = parent;
         this.context = context;
@@ -111,6 +116,10 @@ public abstract class AggregatorBase extends Aggregator {
         return this.metaData;
     }
 
+    public List<Reducer> reducers() {
+        return this.reducers;
+    }
+
     /**
      * Get a {@link LeafBucketCollector} for the given ctx, which should
      * delegate to the given collector.
@@ -136,7 +145,7 @@ public abstract class AggregatorBase extends Aggregator {
         for (int i = 0; i < subAggregators.length; ++i) {
             if (shouldDefer(subAggregators[i])) {
                 if (recordingWrapper == null) {
-                    recordingWrapper = new DeferringBucketCollector();
+                    recordingWrapper = getDeferringCollector();
                 }
                 deferredCollectors.add(subAggregators[i]);
                 subAggregators[i] = recordingWrapper.wrap(subAggregators[i]);
@@ -151,6 +160,12 @@ public abstract class AggregatorBase extends Aggregator {
         collectableSubAggregators = BucketCollector.wrap(collectors);
         doPreCollection();
         collectableSubAggregators.preCollection();
+    }
+
+    public DeferringBucketCollector getDeferringCollector() {
+        // Default impl is a collector that selects the best buckets
+        // but an alternative defer policy may be based on best docs.
+        return new BestBucketsDeferringCollector();
     }
 
     /**

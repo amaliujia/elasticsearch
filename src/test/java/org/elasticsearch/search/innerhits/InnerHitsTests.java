@@ -19,9 +19,11 @@
 
 package org.elasticsearch.search.innerhits;
 
+import org.elasticsearch.Version;
 import org.elasticsearch.action.index.IndexRequestBuilder;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.support.QueryInnerHitBuilder;
@@ -37,9 +39,8 @@ import java.util.List;
 import java.util.Locale;
 
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.index.query.FilterBuilders.hasChildFilter;
-import static org.elasticsearch.index.query.FilterBuilders.nestedFilter;
-import static org.elasticsearch.index.query.FilterBuilders.queryFilter;
+import static org.elasticsearch.index.query.QueryBuilders.hasChildQuery;
+import static org.elasticsearch.index.query.QueryBuilders.nestedQuery;
 import static org.elasticsearch.index.query.QueryBuilders.*;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.*;
 import static org.hamcrest.Matchers.*;
@@ -113,7 +114,7 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
                 client().prepareSearch("articles")
                         .setQuery(nestedQuery("comments", matchQuery("comments.message", "elephant")).innerHit(new QueryInnerHitBuilder().setName("comment"))).request(),
                 client().prepareSearch("articles")
-                        .setQuery(nestedQuery("comments", queryFilter(matchQuery("comments.message", "elephant"))).innerHit(new QueryInnerHitBuilder().setName("comment").addSort("_doc", SortOrder.DESC))).request()
+                        .setQuery(nestedQuery("comments", matchQuery("comments.message", "elephant")).innerHit(new QueryInnerHitBuilder().setName("comment").addSort("_doc", SortOrder.DESC))).request()
         };
         for (SearchRequest searchRequest : searchRequests) {
             SearchResponse response = client().search(searchRequest).actionGet();
@@ -161,7 +162,7 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
             assertThat(innerHits.getTotalHits(), equalTo(2l));
             assertThat(innerHits.getHits().length, equalTo(1));
             assertThat(innerHits.getAt(0).getHighlightFields().get("comments.message").getFragments()[0].string(), equalTo("<em>fox</em> eat quick"));
-            assertThat(innerHits.getAt(0).explanation().toString(), containsString("(MATCH) weight(comments.message:fox in"));
+            assertThat(innerHits.getAt(0).explanation().toString(), containsString("weight(comments.message:fox in"));
             assertThat(innerHits.getAt(0).getFields().get("comments.message").getValue().toString(), equalTo("eat"));
             assertThat(innerHits.getAt(0).getFields().get("script").getValue().toString(), equalTo("eat"));
         }
@@ -206,8 +207,8 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
                 boolQuery.should(nestedQuery("field1", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("a").addSort("_doc", SortOrder.DESC).setSize(size)));
                 boolQuery.should(nestedQuery("field2", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("b").addSort("_doc", SortOrder.DESC).setSize(size)));
             } else {
-                boolQuery.should(constantScoreQuery(nestedFilter("field1", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("a").addSort("_doc", SortOrder.DESC).setSize(size))));
-                boolQuery.should(constantScoreQuery(nestedFilter("field2", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("b").addSort("_doc", SortOrder.DESC).setSize(size))));
+                boolQuery.should(constantScoreQuery(nestedQuery("field1", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("a").addSort("_doc", SortOrder.DESC).setSize(size))));
+                boolQuery.should(constantScoreQuery(nestedQuery("field2", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("b").addSort("_doc", SortOrder.DESC).setSize(size))));
             }
             searchResponse = client().prepareSearch("idx")
                     .setQuery(boolQuery)
@@ -338,7 +339,7 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
             SearchHits innerHits = response.getHits().getAt(0).getInnerHits().get("comment");
             assertThat(innerHits.getHits().length, equalTo(1));
             assertThat(innerHits.getAt(0).getHighlightFields().get("message").getFragments()[0].string(), equalTo("<em>fox</em> eat quick"));
-            assertThat(innerHits.getAt(0).explanation().toString(), containsString("(MATCH) weight(message:fox"));
+            assertThat(innerHits.getAt(0).explanation().toString(), containsString("weight(message:fox"));
             assertThat(innerHits.getAt(0).getFields().get("message").getValue().toString(), equalTo("eat"));
             assertThat(innerHits.getAt(0).getFields().get("script").getValue().toString(), equalTo("eat"));
         }
@@ -391,8 +392,8 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
                 boolQuery.should(hasChildQuery("child1", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("a").addSort("_uid", SortOrder.ASC).setSize(size)));
                 boolQuery.should(hasChildQuery("child2", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("b").addSort("_uid", SortOrder.ASC).setSize(size)));
             } else {
-                boolQuery.should(constantScoreQuery(hasChildFilter("child1", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("a").addSort("_uid", SortOrder.ASC).setSize(size))));
-                boolQuery.should(constantScoreQuery(hasChildFilter("child2", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("b").addSort("_uid", SortOrder.ASC).setSize(size))));
+                boolQuery.should(constantScoreQuery(hasChildQuery("child1", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("a").addSort("_uid", SortOrder.ASC).setSize(size))));
+                boolQuery.should(constantScoreQuery(hasChildQuery("child2", matchAllQuery()).innerHit(new QueryInnerHitBuilder().setName("b").addSort("_uid", SortOrder.ASC).setSize(size))));
             }
             searchResponse = client().prepareSearch("idx")
                     .setSize(numDocs)
@@ -695,8 +696,9 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testNestedInnerHitsWithStoredFieldsAndNoSource() throws Exception {
+    public void testNestedInnerHitsWithStoredFieldsAndNoSourceBackcompat() throws Exception {
         assertAcked(prepareCreate("articles")
+                .setSettings(IndexMetaData.SETTING_VERSION_CREATED, Version.V_1_4_2.id)
                 .addMapping("article", jsonBuilder().startObject()
                                 .startObject("_source").field("enabled", false).endObject()
                                 .startObject("properties")
@@ -733,8 +735,9 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testNestedInnerHitsWithHighlightOnStoredField() throws Exception {
+    public void testNestedInnerHitsWithHighlightOnStoredFieldBackcompat() throws Exception {
         assertAcked(prepareCreate("articles")
+                .setSettings(IndexMetaData.SETTING_VERSION_CREATED, Version.V_1_4_2.id)
                         .addMapping("article", jsonBuilder().startObject()
                                         .startObject("_source").field("enabled", false).endObject()
                                             .startObject("properties")
@@ -771,8 +774,8 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testNestedInnerHitsWithExcludeSource() throws Exception {
-        assertAcked(prepareCreate("articles")
+    public void testNestedInnerHitsWithExcludeSourceBackcompat() throws Exception {
+        assertAcked(prepareCreate("articles").setSettings(IndexMetaData.SETTING_VERSION_CREATED, Version.V_1_4_2.id)
                         .addMapping("article", jsonBuilder().startObject()
                                         .startObject("_source").field("excludes", new String[]{"comments"}).endObject()
                                         .startObject("properties")
@@ -809,8 +812,8 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
-    public void testNestedInnerHitsHiglightWithExcludeSource() throws Exception {
-        assertAcked(prepareCreate("articles")
+    public void testNestedInnerHitsHiglightWithExcludeSourceBackcompat() throws Exception {
+        assertAcked(prepareCreate("articles").setSettings(IndexMetaData.SETTING_VERSION_CREATED, Version.V_1_4_2.id)
                         .addMapping("article", jsonBuilder().startObject()
                                         .startObject("_source").field("excludes", new String[]{"comments"}).endObject()
                                         .startObject("properties")
@@ -865,7 +868,12 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
         List<IndexRequestBuilder> requests = new ArrayList<>();
         requests.add(client().prepareIndex("articles", "article", "1").setSource(jsonBuilder().startObject()
                 .field("title", "quick brown fox")
-                .startObject("comments").startObject("messages").field("message", "fox eat quick").endObject().endObject()
+                .startObject("comments")
+                .startArray("messages")
+                    .startObject().field("message", "fox eat quick").endObject()
+                    .startObject().field("message", "bear eat quick").endObject()
+                .endArray()
+                .endObject()
                 .endObject()));
         indexRandom(true, requests);
 
@@ -877,11 +885,40 @@ public class InnerHitsTests extends ElasticsearchIntegrationTest {
         assertThat(response.getHits().getAt(0).id(), equalTo("1"));
         assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getTotalHits(), equalTo(1l));
         assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).id(), equalTo("1"));
-        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getField().string(), equalTo("comments"));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getField().string(), equalTo("comments.messages"));
         assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getOffset(), equalTo(0));
-        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getChild().getField().string(), equalTo("messages"));
-        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getChild().getOffset(), equalTo(0));
-        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getChild().getChild(), nullValue());
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getChild(), nullValue());
+
+        response = client().prepareSearch("articles")
+                .setQuery(nestedQuery("comments.messages", matchQuery("comments.messages.message", "bear")).innerHit(new QueryInnerHitBuilder()))
+                .get();
+        assertNoFailures(response);
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).id(), equalTo("1"));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getTotalHits(), equalTo(1l));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).id(), equalTo("1"));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getField().string(), equalTo("comments.messages"));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getOffset(), equalTo(1));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getChild(), nullValue());
+
+        // index the message in an object form instead of an array
+        requests = new ArrayList<>();
+        requests.add(client().prepareIndex("articles", "article", "1").setSource(jsonBuilder().startObject()
+                .field("title", "quick brown fox")
+                .startObject("comments").startObject("messages").field("message", "fox eat quick").endObject().endObject()
+                .endObject()));
+        indexRandom(true, requests);
+        response = client().prepareSearch("articles")
+                .setQuery(nestedQuery("comments.messages", matchQuery("comments.messages.message", "fox")).innerHit(new QueryInnerHitBuilder()))
+                .get();
+        assertNoFailures(response);
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).id(), equalTo("1"));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getTotalHits(), equalTo(1l));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).id(), equalTo("1"));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getField().string(), equalTo("comments.messages"));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getOffset(), equalTo(0));
+        assertThat(response.getHits().getAt(0).getInnerHits().get("comments.messages").getAt(0).getNestedIdentity().getChild(), nullValue());
     }
 
 }

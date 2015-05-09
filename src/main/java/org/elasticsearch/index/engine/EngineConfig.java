@@ -21,12 +21,15 @@ package org.elasticsearch.index.engine;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.search.QueryCache;
+import org.apache.lucene.search.QueryCachingPolicy;
 import org.apache.lucene.search.similarities.Similarity;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.index.codec.CodecService;
 import org.elasticsearch.index.deletionpolicy.SnapshotDeletionPolicy;
@@ -35,11 +38,12 @@ import org.elasticsearch.index.merge.policy.MergePolicyProvider;
 import org.elasticsearch.index.merge.scheduler.MergeSchedulerProvider;
 import org.elasticsearch.index.settings.IndexSettingsService;
 import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.index.shard.TranslogRecoveryPerformer;
 import org.elasticsearch.index.store.Store;
-import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.indices.IndicesWarmer;
 import org.elasticsearch.threadpool.ThreadPool;
 
+import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 /*
@@ -49,6 +53,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class EngineConfig {
     private final ShardId shardId;
+    private final TranslogRecoveryPerformer translogRecoveryPerformer;
     private volatile ByteSizeValue indexingBufferSize;
     private volatile ByteSizeValue versionMapSize;
     private volatile String versionMapSizeSetting;
@@ -65,14 +70,17 @@ public final class EngineConfig {
     private final IndicesWarmer warmer;
     private final Store store;
     private final SnapshotDeletionPolicy deletionPolicy;
-    private final Translog translog;
     private final MergePolicyProvider mergePolicyProvider;
     private final MergeSchedulerProvider mergeScheduler;
     private final Analyzer analyzer;
     private final Similarity similarity;
     private final CodecService codecService;
     private final Engine.FailedEngineListener failedEngineListener;
-
+    private final boolean ignoreUnknownTranslog;
+    private final QueryCache filterCache;
+    private final QueryCachingPolicy filterCachingPolicy;
+    private final BigArrays bigArrays;
+    private final Path translogPath;
 
     /**
      * Index setting for index concurrency / number of threadstates in the indexwriter.
@@ -111,16 +119,15 @@ public final class EngineConfig {
     public static final String INDEX_CODEC_SETTING = "index.codec";
 
     /**
-     * Index setting to enable / disable checksum checks on merge
-     * This setting is realtime updateable.
-     */
-    public static final String INDEX_CHECKSUM_ON_MERGE = "index.checksum_on_merge";
-
-    /**
      * The maximum size the version map should grow to before issuing a refresh. Can be an absolute value or a percentage of
      * the current index memory buffer (defaults to 25%)
      */
     public static final String INDEX_VERSION_MAP_SIZE = "index.version_map_size";
+
+
+    /** if set to true the engine will start even if the translog id in the commit point can not be found */
+    public static final String INDEX_IGNORE_UNKNOWN_TRANSLOG = "index.engine.ignore_unknown_translog";
+
 
     public static final TimeValue DEFAULT_REFRESH_INTERVAL = new TimeValue(1, TimeUnit.SECONDS);
     public static final TimeValue DEFAULT_GC_DELETES = TimeValue.timeValueSeconds(60);
@@ -135,23 +142,28 @@ public final class EngineConfig {
     /**
      * Creates a new {@link org.elasticsearch.index.engine.EngineConfig}
      */
-    public EngineConfig(ShardId shardId, boolean optimizeAutoGenerateId, ThreadPool threadPool, ShardIndexingService indexingService, IndexSettingsService indexSettingsService, IndicesWarmer warmer, Store store, SnapshotDeletionPolicy deletionPolicy, Translog translog, MergePolicyProvider mergePolicyProvider, MergeSchedulerProvider mergeScheduler, Analyzer analyzer, Similarity similarity, CodecService codecService, Engine.FailedEngineListener failedEngineListener) {
+    public EngineConfig(ShardId shardId, ThreadPool threadPool, ShardIndexingService indexingService,
+                        IndexSettingsService indexSettingsService, IndicesWarmer warmer, Store store, SnapshotDeletionPolicy deletionPolicy,
+                        MergePolicyProvider mergePolicyProvider, MergeSchedulerProvider mergeScheduler, Analyzer analyzer,
+                        Similarity similarity, CodecService codecService, Engine.FailedEngineListener failedEngineListener,
+                        TranslogRecoveryPerformer translogRecoveryPerformer, QueryCache filterCache, QueryCachingPolicy filterCachingPolicy, BigArrays bigArrays, Path translogPath) {
         this.shardId = shardId;
-        this.optimizeAutoGenerateId = optimizeAutoGenerateId;
         this.threadPool = threadPool;
         this.indexingService = indexingService;
         this.indexSettingsService = indexSettingsService;
         this.warmer = warmer;
         this.store = store;
         this.deletionPolicy = deletionPolicy;
-        this.translog = translog;
         this.mergePolicyProvider = mergePolicyProvider;
         this.mergeScheduler = mergeScheduler;
         this.analyzer = analyzer;
         this.similarity = similarity;
         this.codecService = codecService;
         this.failedEngineListener = failedEngineListener;
+        this.bigArrays = bigArrays;
+        this.translogPath = translogPath;
         Settings indexSettings = indexSettingsService.getSettings();
+        this.optimizeAutoGenerateId = indexSettings.getAsBoolean(EngineConfig.INDEX_OPTIMIZE_AUTOGENERATED_ID_SETTING, false);
         this.compoundOnFlush = indexSettings.getAsBoolean(EngineConfig.INDEX_COMPOUND_ON_FLUSH, compoundOnFlush);
         this.indexConcurrency = indexSettings.getAsInt(EngineConfig.INDEX_CONCURRENCY_SETTING, Math.max(IndexWriterConfig.DEFAULT_MAX_THREAD_STATES, (int) (EsExecutors.boundedNumberOfProcessors(indexSettings) * 0.65)));
         codecName = indexSettings.get(EngineConfig.INDEX_CODEC_SETTING, EngineConfig.DEFAULT_CODEC_NAME);
@@ -159,6 +171,10 @@ public final class EngineConfig {
         gcDeletesInMillis = indexSettings.getAsTime(INDEX_GC_DELETES_SETTING, EngineConfig.DEFAULT_GC_DELETES).millis();
         versionMapSizeSetting = indexSettings.get(INDEX_VERSION_MAP_SIZE, DEFAULT_VERSION_MAP_SIZE);
         updateVersionMapSize();
+        this.translogRecoveryPerformer = translogRecoveryPerformer;
+        this.ignoreUnknownTranslog = indexSettings.getAsBoolean(INDEX_IGNORE_UNKNOWN_TRANSLOG, false);
+        this.filterCache = filterCache;
+        this.filterCachingPolicy = filterCachingPolicy;
     }
 
     /** updates {@link #versionMapSize} based on current setting and {@link #indexingBufferSize} */
@@ -186,6 +202,10 @@ public final class EngineConfig {
         return versionMapSizeSetting;
     }
 
+    /** if true the engine will start even if the translog id in the commit point can not be found */
+    public boolean getIgnoreUnknownTranslog() {
+        return ignoreUnknownTranslog;
+    }
 
     /**
      * returns the size of the version map that should trigger a refresh
@@ -323,13 +343,6 @@ public final class EngineConfig {
     }
 
     /**
-     * Returns a {@link Translog instance}
-     */
-    public Translog getTranslog() {
-        return translog;
-    }
-
-    /**
      * Returns the {@link org.elasticsearch.index.merge.policy.MergePolicyProvider} used to obtain
      * a {@link org.apache.lucene.index.MergePolicy} for the engines {@link org.apache.lucene.index.IndexWriter}
      */
@@ -390,5 +403,49 @@ public final class EngineConfig {
      */
     public void setCompoundOnFlush(boolean compoundOnFlush) {
         this.compoundOnFlush = compoundOnFlush;
+    }
+
+    /**
+     * Returns the {@link org.elasticsearch.index.shard.TranslogRecoveryPerformer} for this engine. This class is used
+     * to apply transaction log operations to the engine. It encapsulates all the logic to transfer the translog entry into
+     * an indexing operation.
+     */
+    public TranslogRecoveryPerformer getTranslogRecoveryPerformer() {
+        return translogRecoveryPerformer;
+    }
+
+    /**
+     * Return the cache to use for filters.
+     */
+    public QueryCache getFilterCache() {
+        return filterCache;
+    }
+
+    /**
+     * Return the policy to use when caching filters.
+     */
+    public QueryCachingPolicy getFilterCachingPolicy() {
+        return filterCachingPolicy;
+    }
+
+    /**
+     * Returns a BigArrays instance for this engine
+     */
+    public BigArrays getBigArrays() {
+        return bigArrays;
+    }
+
+    /**
+     * Returns the translog path for this engine
+     */
+    public Path getTranslogPath() {
+        return translogPath;
+    }
+
+    /**
+     * Returns the {@link org.elasticsearch.index.settings.IndexSettingsService} for this engine.
+     */
+    public IndexSettingsService getIndesSettingService() {
+        return indexSettingsService;
     }
 }

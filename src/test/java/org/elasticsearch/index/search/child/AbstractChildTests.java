@@ -41,7 +41,7 @@ import org.elasticsearch.index.mapper.internal.UidFieldMapper;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.search.internal.SearchContext;
-import org.elasticsearch.test.ElasticsearchSingleNodeLuceneTestCase;
+import org.elasticsearch.test.ElasticsearchSingleNodeTest;
 import org.hamcrest.Description;
 import org.hamcrest.StringDescription;
 import org.junit.After;
@@ -53,21 +53,7 @@ import java.io.IOException;
 import static org.hamcrest.Matchers.equalTo;
 
 @Ignore
-@LuceneTestCase.SuppressCodecs(value = {"Lucene40", "Lucene3x"})
-public abstract class AbstractChildTests extends ElasticsearchSingleNodeLuceneTestCase {
-
-    // TODO: Parent/child does not work with the query cache
-    private static final QueryCache DEFAULT_QUERY_CACHE = IndexSearcher.getDefaultQueryCache();
-
-    @Before
-    public void disableQueryCache() {
-        IndexSearcher.setDefaultQueryCache(null);
-    }
-
-    @After
-    public void restoreQueryCache() {
-        IndexSearcher.setDefaultQueryCache(DEFAULT_QUERY_CACHE);
-    }
+public abstract class AbstractChildTests extends ElasticsearchSingleNodeTest {
 
     /**
      * The name of the field within the child type that stores a score to use in test queries.
@@ -147,10 +133,6 @@ public abstract class AbstractChildTests extends ElasticsearchSingleNodeLuceneTe
             assertThat("actualHit.doc != expectedHit.doc", actualHit.doc, equalTo(expectedHit.doc));
             assertThat("actualHit.score != expectedHit.score", actualHit.score, equalTo(expectedHit.score));
         }
-    }
-
-    static Filter wrap(Filter filter) {
-        return SearchContext.current().filterCache().cache(filter, null, SearchContext.current().indexShard().indexService().queryParserService().autoFilterCachePolicy());
     }
 
     static BitDocIdSetFilter wrapWithBitSetFilter(Filter filter) {

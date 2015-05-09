@@ -19,9 +19,9 @@
 
 package org.elasticsearch.rest.action.search;
 
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.common.Strings;
@@ -31,6 +31,7 @@ import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.index.query.QueryStringQueryBuilder;
 import org.elasticsearch.rest.*;
 import org.elasticsearch.rest.action.exists.RestExistsAction;
+import org.elasticsearch.rest.action.support.RestActions;
 import org.elasticsearch.rest.action.support.RestStatusToXContentListener;
 import org.elasticsearch.search.Scroll;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
@@ -77,7 +78,6 @@ public class RestSearchAction extends BaseRestHandler {
     public void handleRequest(final RestRequest request, final RestChannel channel, final Client client) {
         SearchRequest searchRequest;
         searchRequest = RestSearchAction.parseSearchRequest(request);
-        searchRequest.listenerThreaded(false);
         client.search(searchRequest, new RestStatusToXContentListener<SearchResponse>(channel));
     }
 
@@ -87,25 +87,26 @@ public class RestSearchAction extends BaseRestHandler {
         // get the content, and put it in the body
         // add content/source as template if template flag is set
         boolean isTemplateRequest = request.path().endsWith("/template");
-        if (request.hasContent()) {
+        if (RestActions.hasBodyContent(request)) {
             if (isTemplateRequest) {
-                searchRequest.templateSource(request.content());
+                searchRequest.templateSource(RestActions.getRestContent(request));
             } else {
-                searchRequest.source(request.content());
-            }
-        } else {
-            String source = request.param("source");
-            if (source != null) {
-                if (isTemplateRequest) {
-                    searchRequest.templateSource(source);
-                } else {
-                    searchRequest.source(source);
-                }
+                searchRequest.source(RestActions.getRestContent(request));
             }
         }
 
+        // do not allow 'query_and_fetch' or 'dfs_query_and_fetch' search types
+        // from the REST layer. these modes are an internal optimization and should
+        // not be specified explicitly by the user.
+        String searchType = request.param("search_type");
+        if (SearchType.fromString(searchType).equals(SearchType.QUERY_AND_FETCH) ||
+                SearchType.fromString(searchType).equals(SearchType.DFS_QUERY_AND_FETCH)) {
+            throw new IllegalArgumentException("Unsupported search type [" + searchType + "]");
+        } else {
+            searchRequest.searchType(searchType);
+        }
+
         searchRequest.extraSource(parseSearchSource(request));
-        searchRequest.searchType(request.param("search_type"));
         searchRequest.queryCache(request.paramAsBoolean("query_cache", null));
 
         String scroll = request.param("scroll");
@@ -138,7 +139,7 @@ public class RestSearchAction extends BaseRestHandler {
                 } else if ("AND".equals(defaultOperator)) {
                     queryBuilder.defaultOperator(QueryStringQueryBuilder.Operator.AND);
                 } else {
-                    throw new ElasticsearchIllegalArgumentException("Unsupported defaultOperator [" + defaultOperator + "], can either be [OR] or [AND]");
+                    throw new IllegalArgumentException("Unsupported defaultOperator [" + defaultOperator + "], can either be [OR] or [AND]");
                 }
             }
             if (searchSourceBuilder == null) {
@@ -187,7 +188,7 @@ public class RestSearchAction extends BaseRestHandler {
             int terminateAfter = request.paramAsInt("terminate_after",
                     SearchContext.DEFAULT_TERMINATE_AFTER);
             if (terminateAfter < 0) {
-                throw new ElasticsearchIllegalArgumentException("terminateAfter must be > 0");
+                throw new IllegalArgumentException("terminateAfter must be > 0");
             } else if (terminateAfter > 0) {
                 searchSourceBuilder.terminateAfter(terminateAfter);
             }

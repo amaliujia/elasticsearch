@@ -19,21 +19,20 @@
 
 package org.elasticsearch.search.simple;
 
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
+import org.apache.lucene.util.Constants;
 import org.elasticsearch.action.index.IndexRequestBuilder;
 import org.elasticsearch.action.search.SearchPhaseExecutionException;
 import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.test.ElasticsearchIntegrationTest;
-import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
+import static com.carrotsearch.randomizedtesting.RandomizedTest.systemPropertyAsBoolean;
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_REPLICAS;
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_SHARDS;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
@@ -49,14 +48,14 @@ public class SimpleSearchTests extends ElasticsearchIntegrationTest {
         try {
             client().prepareSearch((String) null).setQuery(QueryBuilders.termQuery("_id", "XXX1")).execute().actionGet();
             fail();
-        } catch (ElasticsearchIllegalArgumentException e) {
+        } catch (IllegalArgumentException e) {
 
         }
 
         try {
             client().prepareSearch((String[]) null).setQuery(QueryBuilders.termQuery("_id", "XXX1")).execute().actionGet();
             fail();
-        } catch (ElasticsearchIllegalArgumentException e) {
+        } catch (IllegalArgumentException e) {
 
         }
     }
@@ -154,6 +153,7 @@ public class SimpleSearchTests extends ElasticsearchIntegrationTest {
     
     @Test
     public void localeDependentDateTests() throws Exception {
+        assumeFalse("Locals are buggy on JDK9EA", Constants.JRE_IS_MINIMUM_JAVA9 && systemPropertyAsBoolean("tests.security.manager", false));
         assertAcked(prepareCreate("test")
                 .addMapping("type1",
                         jsonBuilder().startObject()
@@ -234,7 +234,7 @@ public class SimpleSearchTests extends ElasticsearchIntegrationTest {
             client().prepareSearch("idx").setFrom(Integer.MAX_VALUE).get();
             fail();
         } catch (SearchPhaseExecutionException e) {
-            assertThat(e.getMessage(), containsString("Result window is too large, from + size must be less than or equal to:"));
+            assertThat(e.toString(), containsString("Result window is too large, from + size must be less than or equal to:"));
         }
     }
 }

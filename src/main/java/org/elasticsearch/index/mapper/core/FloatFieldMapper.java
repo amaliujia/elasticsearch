@@ -27,14 +27,15 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.index.DocValuesType;
 import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.index.Terms;
 import org.apache.lucene.search.Filter;
-import org.apache.lucene.search.NumericRangeFilter;
 import org.apache.lucene.search.NumericRangeQuery;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.QueryWrapperFilter;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
 import org.apache.lucene.util.NumericUtils;
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
+import org.elasticsearch.action.fieldstats.FieldStats;
 import org.elasticsearch.common.Explicit;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Numbers;
@@ -47,14 +48,12 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.analysis.NumericFloatAnalyzer;
 import org.elasticsearch.index.fielddata.FieldDataType;
-import org.elasticsearch.index.fielddata.IndexNumericFieldData;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
-import org.elasticsearch.index.mapper.MergeContext;
 import org.elasticsearch.index.mapper.MergeMappingException;
+import org.elasticsearch.index.mapper.MergeResult;
 import org.elasticsearch.index.mapper.ParseContext;
 import org.elasticsearch.index.query.QueryParseContext;
-import org.elasticsearch.index.search.NumericRangeFieldDataFilter;
 import org.elasticsearch.index.similarity.SimilarityProvider;
 
 import java.io.IOException;
@@ -202,38 +201,8 @@ public class FloatFieldMapper extends NumberFieldMapper<Float> {
     }
 
     @Override
-    public Query termQuery(Object value, @Nullable QueryParseContext context) {
-        float fValue = parseValue(value);
-        return NumericRangeQuery.newFloatRange(names.indexName(), precisionStep,
-                fValue, fValue, true, true);
-    }
-
-    @Override
     public Query rangeQuery(Object lowerTerm, Object upperTerm, boolean includeLower, boolean includeUpper, @Nullable QueryParseContext context) {
         return NumericRangeQuery.newFloatRange(names.indexName(), precisionStep,
-                lowerTerm == null ? null : parseValue(lowerTerm),
-                upperTerm == null ? null : parseValue(upperTerm),
-                includeLower, includeUpper);
-    }
-
-    @Override
-    public Filter termFilter(Object value, @Nullable QueryParseContext context) {
-        float fValue = parseValue(value);
-        return NumericRangeFilter.newFloatRange(names.indexName(), precisionStep,
-                fValue, fValue, true, true);
-    }
-
-    @Override
-    public Filter rangeFilter(Object lowerTerm, Object upperTerm, boolean includeLower, boolean includeUpper, @Nullable QueryParseContext context) {
-        return NumericRangeFilter.newFloatRange(names.indexName(), precisionStep,
-                lowerTerm == null ? null : parseValue(lowerTerm),
-                upperTerm == null ? null : parseValue(upperTerm),
-                includeLower, includeUpper);
-    }
-
-    @Override
-    public Filter rangeFilter(QueryParseContext parseContext, Object lowerTerm, Object upperTerm, boolean includeLower, boolean includeUpper, @Nullable QueryParseContext context) {
-        return NumericRangeFieldDataFilter.newFloatRange((IndexNumericFieldData) parseContext.getForField(this),
                 lowerTerm == null ? null : parseValue(lowerTerm),
                 upperTerm == null ? null : parseValue(upperTerm),
                 includeLower, includeUpper);
@@ -244,10 +213,10 @@ public class FloatFieldMapper extends NumberFieldMapper<Float> {
         if (nullValue == null) {
             return null;
         }
-        return NumericRangeFilter.newFloatRange(names.indexName(), precisionStep,
+        return new QueryWrapperFilter(NumericRangeQuery.newFloatRange(names.indexName(), precisionStep,
                 nullValue,
                 nullValue,
-                true, true);
+                true, true));
     }
 
     @Override
@@ -308,7 +277,7 @@ public class FloatFieldMapper extends NumberFieldMapper<Float> {
                         } else if ("boost".equals(currentFieldName) || "_boost".equals(currentFieldName)) {
                             boost = parser.floatValue();
                         } else {
-                            throw new ElasticsearchIllegalArgumentException("unknown property [" + currentFieldName + "]");
+                            throw new IllegalArgumentException("unknown property [" + currentFieldName + "]");
                         }
                     }
                 }
@@ -351,12 +320,12 @@ public class FloatFieldMapper extends NumberFieldMapper<Float> {
     }
 
     @Override
-    public void merge(Mapper mergeWith, MergeContext mergeContext) throws MergeMappingException {
-        super.merge(mergeWith, mergeContext);
+    public void merge(Mapper mergeWith, MergeResult mergeResult) throws MergeMappingException {
+        super.merge(mergeWith, mergeResult);
         if (!this.getClass().equals(mergeWith.getClass())) {
             return;
         }
-        if (!mergeContext.mergeFlags().simulate()) {
+        if (!mergeResult.simulate()) {
             this.nullValue = ((FloatFieldMapper) mergeWith).nullValue;
             this.nullValueAsString = ((FloatFieldMapper) mergeWith).nullValueAsString;
         }
@@ -379,6 +348,15 @@ public class FloatFieldMapper extends NumberFieldMapper<Float> {
             builder.field("include_in_all", false);
         }
 
+    }
+
+    @Override
+    public FieldStats stats(Terms terms, int maxDoc) throws IOException {
+        float minValue = NumericUtils.sortableIntToFloat(NumericUtils.getMinInt(terms));
+        float maxValue = NumericUtils.sortableIntToFloat(NumericUtils.getMaxInt(terms));
+        return new FieldStats.Float(
+                maxDoc, terms.getDocCount(), terms.getSumDocFreq(), terms.getSumTotalTermFreq(), minValue, maxValue
+        );
     }
 
     public static class CustomFloatNumericField extends CustomNumericField {
