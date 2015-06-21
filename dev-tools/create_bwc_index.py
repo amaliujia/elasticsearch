@@ -130,7 +130,7 @@ def build_version(version_tuple):
 def build_tuple(version_string):
   return [int(x) for x in version_string.split('.')]
 
-def start_node(version, release_dir, data_dir, tcp_port=DEFAULT_TRANSPORT_TCP_PORT, http_port=DEFAULT_HTTP_TCP_PORT, cluster_name=None):
+def start_node(version, release_dir, data_dir, repo_dir, tcp_port=DEFAULT_TRANSPORT_TCP_PORT, http_port=DEFAULT_HTTP_TCP_PORT, cluster_name=None):
   logging.info('Starting node from %s on port %s/%s, data_dir %s' % (release_dir, tcp_port, http_port, data_dir))
   if cluster_name is None:
     cluster_name = 'bwc_index_' + version
@@ -143,7 +143,8 @@ def start_node(version, release_dir, data_dir, tcp_port=DEFAULT_TRANSPORT_TCP_PO
     '-Des.network.host=localhost',
     '-Des.discovery.zen.ping.multicast.enabled=false',
     '-Des.transport.tcp.port=%s' % tcp_port,
-    '-Des.http.port=%s' % http_port
+    '-Des.http.port=%s' % http_port,
+    '-Des.path.repo=%s' % repo_dir
   ]
   if version.startswith('0.') or version.startswith('1.0.0.Beta') :
     cmd.append('-f') # version before 1.0 start in background automatically
@@ -182,7 +183,7 @@ def generate_index(client, version, index_name):
       }
     }
     # completion type was added in 0.90.3
-    if version not in ['0.90.0.Beta1', '0.90.0.RC1', '0.90.0.RC2', '0.90.0', '0.90.1', '0.90.2']:
+    if not version.startswith('0.20') and version not in ['0.90.0.Beta1', '0.90.0.RC1', '0.90.0.RC2', '0.90.0', '0.90.1', '0.90.2']:
       mappings['analyzer_type1']['properties']['completion_with_index_analyzer'] = {
         'type': 'completion',
         'index_analyzer': 'standard'
@@ -240,7 +241,11 @@ def generate_index(client, version, index_name):
   client.indices.create(index=index_name, body={
       'settings': {
           'number_of_shards': 1,
-          'number_of_replicas': 0
+          'number_of_replicas': 0,
+          # Same as ES default (60 seconds), but missing the units to make sure they are inserted on upgrade:
+          "gc_deletes": '60000',
+          # Same as ES default (5 GB), but missing the units to make sure they are inserted on upgrade:
+          "merge.policy.max_merged_segment": '5368709120'
       },
       'mappings': mappings
   })
@@ -257,11 +262,15 @@ def generate_index(client, version, index_name):
   logging.info('Running basic asserts on the data added')
   run_basic_asserts(client, index_name, 'doc', num_docs)
 
-def snapshot_index(client, cfg, version, repo_dir):
+def snapshot_index(client, version, repo_dir):
   # Add bogus persistent settings to make sure they can be restored
   client.cluster.put_settings(body={
     'persistent': {
-      'cluster.routing.allocation.exclude.version_attr': version
+      'cluster.routing.allocation.exclude.version_attr': version,
+      # Same as ES default (30 seconds), but missing the units to make sure they are inserted on upgrade:
+      'discovery.zen.publish_timeout': '30000',
+      # Same as ES default (512 KB), but missing the units to make sure they are inserted on upgrade:
+      'indices.recovery.file_chunk_size': '524288',
     }
   })
   client.indices.put_template(name='template_' + version.lower(), order=0, body={
@@ -321,7 +330,7 @@ def parse_config():
                         help='Recreate all existing backwards compatibility indexes')
   parser.add_argument('--releases-dir', '-d', default='backwards', metavar='DIR',
                       help='The directory containing elasticsearch releases')
-  parser.add_argument('--output-dir', '-o', default='src/test/resources/org/elasticsearch/bwcompat',
+  parser.add_argument('--output-dir', '-o', default='core/src/test/resources/org/elasticsearch/bwcompat',
                       help='The directory to write the zipped index into')
   parser.add_argument('--tcp-port', default=DEFAULT_TRANSPORT_TCP_PORT, type=int,
                       help='The port to use as the minimum port for TCP communication')
@@ -356,12 +365,12 @@ def create_bwc_index(cfg, version):
   node = None
 
   try:
-    node = start_node(version, release_dir, data_dir, cfg.tcp_port, cfg.http_port)
+    node = start_node(version, release_dir, data_dir, repo_dir, cfg.tcp_port, cfg.http_port)
     client = create_client(cfg.http_port)
     index_name = 'index-%s' % version.lower()
     generate_index(client, version, index_name)
     if snapshot_supported:
-      snapshot_index(client, cfg, version, repo_dir)
+      snapshot_index(client, version, repo_dir)
 
     # 10067: get a delete-by-query into the translog on upgrade.  We must do
     # this after the snapshot, because it calls flush.  Otherwise the index

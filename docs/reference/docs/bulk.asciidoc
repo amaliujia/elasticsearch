@@ -167,7 +167,8 @@ The `refresh` parameter can be set to `true` in order to refresh the relevant
 primary and replica shards immediately after the bulk operation has occurred
 and make it searchable, instead of waiting for the normal refresh interval to
 expire. Setting it to `true` can trigger additional load, and may slow down
-indexing.
+indexing. Due to its costly nature, the `refresh` parameter is set on the bulk request level
+and is not supported on each individual bulk item.
 
 [float]
 [[bulk-update]]
@@ -187,7 +188,7 @@ the options. Curl example with update actions:
 { "update" : {"_id" : "1", "_type" : "type1", "_index" : "index1", "_retry_on_conflict" : 3} }
 { "doc" : {"field" : "value"} }
 { "update" : { "_id" : "0", "_type" : "type1", "_index" : "index1", "_retry_on_conflict" : 3} }
-{ "script" : "ctx._source.counter += param1", "lang" : "js", "params" : {"param1" : 1}, "upsert" : {"counter" : 1}}
+{ "script" : { "inline": "ctx._source.counter += param1", "lang" : "js", "params" : {"param1" : 1}}, "upsert" : {"counter" : 1}}
 { "update" : {"_id" : "2", "_type" : "type1", "_index" : "index1", "_retry_on_conflict" : 3} }
 { "doc" : {"field" : "value"}, "doc_as_upsert" : true }
 --------------------------------------------------

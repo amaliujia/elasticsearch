@@ -50,6 +50,8 @@ to. The `mode` option can have the following values:
         number based array fields.
 `avg`:: Use the average of all values as sort value. Only applicable
         for number based array fields.
+`median`:: Use the median of all values as sort value.  Only applicable
+           for number based array fields.
 
 ===== Sort mode example usage
 
@@ -316,10 +318,12 @@ Allow to sort based on custom scripts, here is an example:
     },
     "sort" : {
         "_script" : {
-            "script" : "doc['field_name'].value * factor",
             "type" : "number",
-            "params" : {
-                "factor" : 1.1
+            "script" : {
+                "inline": "doc['field_name'].value * factor",
+                "params" : {
+                    "factor" : 1.1
+                }
             },
             "order" : "asc"
         }
