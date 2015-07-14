@@ -28,11 +28,10 @@ import org.elasticsearch.common.io.stream.Streamable;
 import org.elasticsearch.common.settings.Settings;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.util.Locale;
 import java.util.Objects;
 
-public class ByteSizeValue implements Serializable, Streamable {
+public class ByteSizeValue implements Streamable {
 
     private long size;
 
@@ -215,14 +214,14 @@ public class ByteSizeValue implements Serializable, Streamable {
             } else {
                 // Missing units:
                 if (Settings.getSettingsRequireUnits()) {
-                    throw new ElasticsearchParseException("Failed to parse setting [" + settingName + "] with value [" + sValue + "] as a size in bytes: unit is missing or unrecognized") ;
+                    throw new ElasticsearchParseException("failed to parse setting [{}] with value [{}] as a size in bytes: unit is missing or unrecognized", settingName, sValue);
                 } else {
                     // Leniency default to bytes:
                     bytes = Long.parseLong(sValue);
                 }
             }
         } catch (NumberFormatException e) {
-            throw new ElasticsearchParseException("Failed to parse [" + sValue + "]", e);
+            throw new ElasticsearchParseException("failed to parse [{}]", e, sValue);
         }
         return new ByteSizeValue(bytes, ByteSizeUnit.BYTES);
     }

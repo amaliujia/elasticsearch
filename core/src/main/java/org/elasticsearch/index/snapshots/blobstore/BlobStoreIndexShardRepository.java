@@ -22,7 +22,10 @@ package org.elasticsearch.index.snapshots.blobstore;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.io.ByteStreams;
-import org.apache.lucene.index.*;
+import org.apache.lucene.index.CorruptIndexException;
+import org.apache.lucene.index.IndexFormatTooNewException;
+import org.apache.lucene.index.IndexFormatTooOldException;
+import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
@@ -33,6 +36,7 @@ import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.metadata.SnapshotId;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.common.blobstore.BlobMetaData;
@@ -98,6 +102,8 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
 
     private boolean compress;
 
+    private final ParseFieldMatcher parseFieldMatcher;
+
     protected static final String SNAPSHOT_PREFIX = "snapshot-";
 
     protected static final String SNAPSHOT_INDEX_PREFIX = "index-";
@@ -109,6 +115,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
     @Inject
     public BlobStoreIndexShardRepository(Settings settings, RepositoryName repositoryName, IndicesService indicesService, ClusterService clusterService) {
         super(settings);
+        this.parseFieldMatcher = new ParseFieldMatcher(settings);
         this.repositoryName = repositoryName.name();
         this.indicesService = indicesService;
         this.clusterService = clusterService;
@@ -204,7 +211,9 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
                 throw new RepositoryVerificationException(repositoryName, "store location [" + blobStore + "] is not accessible on the node [" + localNode + "]", exp);
             }
         } else {
-            throw new RepositoryVerificationException(repositoryName, "store location [" + blobStore + "] is not shared between node [" + localNode + "] and the master node");
+            throw new RepositoryVerificationException(repositoryName, "a file written by master to the store [" + blobStore + "] cannot be accessed on the node [" + localNode + "]. "
+                    + "This might indicate that the store [" + blobStore + "] is not shared between this node and the master node or "
+                    + "that permissions on the store don't allow reading files written by the master node");
         }
     }
 
@@ -257,11 +266,11 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
      * @return snapshot
      * @throws IOException if an IOException occurs
      */
-    public static BlobStoreIndexShardSnapshot readSnapshot(InputStream stream) throws IOException {
+    public static BlobStoreIndexShardSnapshot readSnapshot(InputStream stream, ParseFieldMatcher parseFieldMatcher) throws IOException {
         byte[] data = ByteStreams.toByteArray(stream);
         try (XContentParser parser = XContentHelper.createParser(new BytesArray(data))) {
             parser.nextToken();
-            return BlobStoreIndexShardSnapshot.fromXContent(parser);
+            return BlobStoreIndexShardSnapshot.fromXContent(parser, parseFieldMatcher);
         }
     }
 
@@ -272,11 +281,11 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
      * @return snapshot
      * @throws IOException if an IOException occurs
      * */
-    public static BlobStoreIndexShardSnapshots readSnapshots(InputStream stream) throws IOException {
+    public static BlobStoreIndexShardSnapshots readSnapshots(InputStream stream, ParseFieldMatcher parseFieldMatcher) throws IOException {
         byte[] data = ByteStreams.toByteArray(stream);
         try (XContentParser parser = XContentHelper.createParser(new BytesArray(data))) {
             parser.nextToken();
-            return BlobStoreIndexShardSnapshots.fromXContent(parser);
+            return BlobStoreIndexShardSnapshots.fromXContent(parser, parseFieldMatcher);
         }
     }
     /**
@@ -349,7 +358,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
         public BlobStoreIndexShardSnapshot loadSnapshot() {
             BlobStoreIndexShardSnapshot snapshot;
             try (InputStream stream = blobContainer.openInput(snapshotBlobName(snapshotId))) {
-                snapshot = readSnapshot(stream);
+                snapshot = readSnapshot(stream, parseFieldMatcher);
             } catch (IOException ex) {
                 throw new IndexShardRestoreFailedException(shardId, "failed to read shard snapshot file", ex);
             }
@@ -473,7 +482,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
             }
             if (latest >= 0) {
                 try (InputStream stream = blobContainer.openInput(SNAPSHOT_INDEX_PREFIX + latest)) {
-                    return new Tuple<>(readSnapshots(stream), latest);
+                    return new Tuple<>(readSnapshots(stream, parseFieldMatcher), latest);
                 } catch (IOException e) {
                     logger.warn("failed to read index file  [{}]", e, SNAPSHOT_INDEX_PREFIX + latest);
                 }
@@ -484,7 +493,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
             for (String name : blobs.keySet()) {
                 if (name.startsWith(SNAPSHOT_PREFIX)) {
                     try (InputStream stream = blobContainer.openInput(name)) {
-                        BlobStoreIndexShardSnapshot snapshot = readSnapshot(stream);
+                        BlobStoreIndexShardSnapshot snapshot = readSnapshot(stream, parseFieldMatcher);
                         snapshots.add(new SnapshotFiles(snapshot.snapshot(), snapshot.indexFiles()));
                     } catch (IOException e) {
                         logger.warn("failed to read commit point [{}]", e, name);
@@ -598,6 +607,11 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
                 }
 
                 snapshotStatus.files(indexNumberOfFiles, indexTotalFilesSize);
+
+                if (snapshotStatus.aborted()) {
+                    logger.debug("[{}] [{}] Aborted during initialization", shardId, snapshotId);
+                    throw new IndexShardSnapshotFailedException(shardId, "Aborted");
+                }
 
                 snapshotStatus.updateStage(IndexShardSnapshotStatus.Stage.STARTED);
 
@@ -746,7 +760,7 @@ public class BlobStoreIndexShardRepository extends AbstractComponent implements 
      * The new logic for StoreFileMetaData reads the entire <tt>.si</tt> and <tt>segments.n</tt> files to strengthen the
      * comparison of the files on a per-segment / per-commit level.
      */
-    private static final void maybeRecalculateMetadataHash(final BlobContainer blobContainer, final FileInfo fileInfo, Store.MetadataSnapshot snapshot) throws Throwable {
+    private static void maybeRecalculateMetadataHash(final BlobContainer blobContainer, final FileInfo fileInfo, Store.MetadataSnapshot snapshot) throws Throwable {
         final StoreFileMetaData metadata;
         if (fileInfo != null && (metadata = snapshot.get(fileInfo.physicalName())) != null) {
             if (metadata.hash().length > 0 && fileInfo.metadata().hash().length == 0) {

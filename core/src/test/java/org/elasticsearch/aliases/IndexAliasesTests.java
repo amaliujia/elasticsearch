@@ -38,7 +38,6 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
-import org.elasticsearch.index.query.QueryParsingException;
 import org.elasticsearch.rest.action.admin.indices.alias.delete.AliasesMissingException;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.SearchHits;
@@ -908,29 +907,21 @@ public class IndexAliasesTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
+    // Before 2.0 alias filters were parsed at alias creation time, in order
+    // for filters to work correctly ES required that fields mentioned in those
+    // filters exist in the mapping.
+    // From 2.0 and higher alias filters are parsed at request time and therefor
+    // fields mentioned in filters don't need to exist in the mapping.
     public void testAddAliasWithFilterNoMapping() throws Exception {
         assertAcked(prepareCreate("test"));
-
-        try {
-            client().admin().indices().prepareAliases()
-                    .addAlias("test", "a", QueryBuilders.termQuery("field1", "term"))
-                    .get();
-            fail();
-        } catch (IllegalArgumentException e) {
-            assertThat(e.getCause(), instanceOf(QueryParsingException.class));
-        }
-
-        try {
-            client().admin().indices().prepareAliases()
-                    .addAlias("test", "a", QueryBuilders.rangeQuery("field2").from(0).to(1))
-                    .get();
-            fail();
-        } catch (IllegalArgumentException e) {
-            assertThat(e.getCause(), instanceOf(QueryParsingException.class));
-        }
-
         client().admin().indices().prepareAliases()
-                .addAlias("test", "a", QueryBuilders.matchAllQuery()) // <-- no fail, b/c no field mentioned
+                .addAlias("test", "a", QueryBuilders.termQuery("field1", "term"))
+                .get();
+        client().admin().indices().prepareAliases()
+                .addAlias("test", "a", QueryBuilders.rangeQuery("field2").from(0).to(1))
+                .get();
+        client().admin().indices().prepareAliases()
+                .addAlias("test", "a", QueryBuilders.matchAllQuery())
                 .get();
     }
 
@@ -960,18 +951,19 @@ public class IndexAliasesTests extends ElasticsearchIntegrationTest {
                         .addMapping("parent")
                         .addMapping("child", "_parent", "type=parent")
         );
-        try {
-            assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter1", hasChildQuery("child", matchAllQuery())));
-        } catch (IllegalArgumentException e) {
-            assertThat(e.getCause(), instanceOf(IllegalStateException.class));
-            assertThat(e.getCause().getMessage(), equalTo("Search context is required to be set"));
-        }
-        try {
-            assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter2", hasParentQuery("child", matchAllQuery())));
-        } catch (IllegalArgumentException e) {
-            assertThat(e.getCause(), instanceOf(IllegalStateException.class));
-            assertThat(e.getCause().getMessage(), equalTo("Search context is required to be set"));
-        }
+        client().prepareIndex("my-index", "parent", "1").setSource("{}").get();
+        client().prepareIndex("my-index", "child", "2").setSource("{}").setParent("1").get();
+        refresh();
+
+        assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter1", hasChildQuery("child", matchAllQuery())));
+        assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter2", hasParentQuery("parent", matchAllQuery())));
+
+        SearchResponse response = client().prepareSearch("filter1").get();
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).id(), equalTo("1"));
+        response = client().prepareSearch("filter2").get();
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).id(), equalTo("2"));
     }
 
     @Test
@@ -984,8 +976,18 @@ public class IndexAliasesTests extends ElasticsearchIntegrationTest {
                         .addMapping("parent")
                         .addMapping("child", "_parent", "type=parent")
         );
+        client().prepareIndex("my-index", "parent", "1").setSource("{}").get();
+        client().prepareIndex("my-index", "child", "2").setSource("{}").setParent("1").get();
+        refresh();
+
         assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter1", hasChildQuery("child", matchAllQuery())));
-        assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter2", hasParentQuery("child", matchAllQuery())));
+        assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter2", hasParentQuery("parent", matchAllQuery())));
+        SearchResponse response = client().prepareSearch("filter1").get();
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).id(), equalTo("1"));
+        response = client().prepareSearch("filter2").get();
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).id(), equalTo("2"));
     }
 
     @Test

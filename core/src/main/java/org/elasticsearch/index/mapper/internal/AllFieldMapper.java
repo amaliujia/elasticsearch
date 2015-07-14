@@ -25,7 +25,6 @@ import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.Query;
 import org.elasticsearch.Version;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.lucene.Lucene;
@@ -39,9 +38,8 @@ import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.MergeMappingException;
 import org.elasticsearch.index.mapper.MergeResult;
+import org.elasticsearch.index.mapper.MetadataFieldMapper;
 import org.elasticsearch.index.mapper.ParseContext;
-import org.elasticsearch.index.mapper.RootMapper;
-import org.elasticsearch.index.mapper.core.AbstractFieldMapper;
 import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.index.similarity.SimilarityLookupService;
 
@@ -52,15 +50,14 @@ import java.util.Map;
 
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeBooleanValue;
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeMapValue;
-import static org.elasticsearch.index.mapper.MapperBuilders.all;
 import static org.elasticsearch.index.mapper.core.TypeParsers.parseField;
 
 /**
  *
  */
-public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
+public class AllFieldMapper extends MetadataFieldMapper {
 
-    public interface IncludeInAll extends Mapper {
+    public interface IncludeInAll {
 
         void includeInAll(Boolean includeInAll);
 
@@ -73,7 +70,7 @@ public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
 
     public static final String CONTENT_TYPE = "_all";
 
-    public static class Defaults extends AbstractFieldMapper.Defaults {
+    public static class Defaults {
         public static final String NAME = AllFieldMapper.NAME;
         public static final String INDEX_NAME = AllFieldMapper.NAME;
         public static final EnabledAttributeMapper ENABLED = EnabledAttributeMapper.UNSET_ENABLED;
@@ -88,12 +85,12 @@ public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
         }
     }
 
-    public static class Builder extends AbstractFieldMapper.Builder<Builder, AllFieldMapper> {
+    public static class Builder extends MetadataFieldMapper.Builder<Builder, AllFieldMapper> {
 
         private EnabledAttributeMapper enabled = Defaults.ENABLED;
 
-        public Builder() {
-            super(Defaults.NAME, Defaults.FIELD_TYPE);
+        public Builder(MappedFieldType existing) {
+            super(Defaults.NAME, existing == null ? Defaults.FIELD_TYPE : existing);
             builder = this;
             indexName = Defaults.INDEX_NAME;
         }
@@ -112,14 +109,14 @@ public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
             }
             fieldType.setTokenized(true);
 
-            return new AllFieldMapper(fieldType, enabled, fieldDataSettings, context.indexSettings());
+            return new AllFieldMapper(fieldType, enabled, context.indexSettings());
         }
     }
 
     public static class TypeParser implements Mapper.TypeParser {
         @Override
         public Mapper.Builder parse(String name, Map<String, Object> node, ParserContext parserContext) throws MapperParsingException {
-            AllFieldMapper.Builder builder = all();
+            Builder builder = new Builder(parserContext.mapperService().fullName(NAME));
             
             // parseField below will happily parse the doc_values setting, but it is then never passed to
             // the AllFieldMapper ctor in the builder since it is not valid. Here we validate
@@ -146,7 +143,7 @@ public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
                 if (fieldName.equals("enabled")) {
                     builder.enabled(nodeBooleanValue(fieldNode) ? EnabledAttributeMapper.ENABLED : EnabledAttributeMapper.DISABLED);
                     iterator.remove();
-                } else if (fieldName.equals("auto_boost") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+                } else if (fieldName.equals("auto_boost") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                     // Old 1.x setting which is now ignored
                     iterator.remove();
                 }
@@ -158,7 +155,7 @@ public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
     static final class AllFieldType extends MappedFieldType {
 
         public AllFieldType() {
-            super(AbstractFieldMapper.Defaults.FIELD_TYPE);
+            setFieldDataType(new FieldDataType("string"));
         }
 
         protected AllFieldType(AllFieldType ref) {
@@ -168,6 +165,11 @@ public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
         @Override
         public MappedFieldType clone() {
             return new AllFieldType(this);
+        }
+
+        @Override
+        public String typeName() {
+            return CONTENT_TYPE;
         }
 
         @Override
@@ -191,29 +193,18 @@ public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
 
     private EnabledAttributeMapper enabledState;
 
-    public AllFieldMapper(Settings indexSettings) {
-        this(Defaults.FIELD_TYPE.clone(), Defaults.ENABLED, null, indexSettings);
+    public AllFieldMapper(Settings indexSettings, MappedFieldType existing) {
+        this(existing == null ? Defaults.FIELD_TYPE.clone() : existing.clone(), Defaults.ENABLED, indexSettings);
     }
 
-    protected AllFieldMapper(MappedFieldType fieldType, EnabledAttributeMapper enabled,
-                             @Nullable Settings fieldDataSettings, Settings indexSettings) {
-        super(fieldType, false, fieldDataSettings, indexSettings);
+    protected AllFieldMapper(MappedFieldType fieldType, EnabledAttributeMapper enabled, Settings indexSettings) {
+        super(NAME, fieldType, Defaults.FIELD_TYPE, indexSettings);
         this.enabledState = enabled;
 
     }
 
     public boolean enabled() {
         return this.enabledState.enabled;
-    }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return Defaults.FIELD_TYPE;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return new FieldDataType("string");
     }
 
     @Override
@@ -310,12 +301,6 @@ public class AllFieldMapper extends AbstractFieldMapper implements RootMapper {
             builder.field("similarity", fieldType().similarity().name());
         } else if (includeDefaults) {
             builder.field("similarity", SimilarityLookupService.DEFAULT_SIMILARITY);
-        }
-
-        if (customFieldDataSettings != null) {
-            builder.field("fielddata", (Map) customFieldDataSettings.getAsMap());
-        } else if (includeDefaults) {
-            builder.field("fielddata", (Map) fieldType().fieldDataType().getSettings().getAsMap());
         }
     }
 

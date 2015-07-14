@@ -26,6 +26,7 @@ import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.Requests;
 import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
@@ -76,7 +77,7 @@ public class SearchRequest extends ActionRequest<SearchRequest> implements Indic
     private BytesReference source;
 
     private BytesReference extraSource;
-    private Boolean queryCache;
+    private Boolean requestCache;
 
     private Scroll scroll;
 
@@ -103,7 +104,7 @@ public class SearchRequest extends ActionRequest<SearchRequest> implements Indic
         this.template = searchRequest.template;
         this.source = searchRequest.source;
         this.extraSource = searchRequest.extraSource;
-        this.queryCache = searchRequest.queryCache;
+        this.requestCache = searchRequest.requestCache;
         this.scroll = searchRequest.scroll;
         this.types = searchRequest.types;
         this.indicesOptions = searchRequest.indicesOptions;
@@ -239,7 +240,7 @@ public class SearchRequest extends ActionRequest<SearchRequest> implements Indic
      * "query_then_fetch"/"queryThenFetch", and "query_and_fetch"/"queryAndFetch".
      */
     public SearchRequest searchType(String searchType) {
-        return searchType(SearchType.fromString(searchType));
+        return searchType(SearchType.fromString(searchType, ParseFieldMatcher.EMPTY));
     }
 
     /**
@@ -533,12 +534,12 @@ public class SearchRequest extends ActionRequest<SearchRequest> implements Indic
      * will default to the index level setting if query cache is enabled or not).
      */
     public SearchRequest queryCache(Boolean queryCache) {
-        this.queryCache = queryCache;
+        this.requestCache = queryCache;
         return this;
     }
 
-    public Boolean queryCache() {
-        return this.queryCache;
+    public Boolean requestCache() {
+        return this.requestCache;
     }
 
     @Override
@@ -568,7 +569,7 @@ public class SearchRequest extends ActionRequest<SearchRequest> implements Indic
         if (in.readBoolean()) {
             template = Template.readTemplate(in);
         }
-        queryCache = in.readOptionalBoolean();
+        requestCache = in.readOptionalBoolean();
     }
 
     @Override
@@ -602,6 +603,6 @@ public class SearchRequest extends ActionRequest<SearchRequest> implements Indic
             template.writeTo(out);
         }
 
-        out.writeOptionalBoolean(queryCache);
+        out.writeOptionalBoolean(requestCache);
     }
 }

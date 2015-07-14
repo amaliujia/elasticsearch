@@ -20,7 +20,6 @@
 package org.elasticsearch.index.mapper.core;
 
 import com.carrotsearch.hppc.LongArrayList;
-
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.NumericTokenStream;
 import org.apache.lucene.analysis.TokenStream;
@@ -36,19 +35,13 @@ import org.apache.lucene.store.ByteArrayDataOutput;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.Explicit;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.Fuzziness;
 import org.elasticsearch.common.util.ByteUtils;
 import org.elasticsearch.common.util.CollectionUtils;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
-import org.elasticsearch.index.mapper.MappedFieldType;
-import org.elasticsearch.index.mapper.Mapper;
-import org.elasticsearch.index.mapper.MapperParsingException;
-import org.elasticsearch.index.mapper.MergeMappingException;
-import org.elasticsearch.index.mapper.MergeResult;
-import org.elasticsearch.index.mapper.ParseContext;
+import org.elasticsearch.index.mapper.*;
 import org.elasticsearch.index.mapper.internal.AllFieldMapper;
 
 import java.io.IOException;
@@ -58,9 +51,9 @@ import java.util.List;
 /**
  *
  */
-public abstract class NumberFieldMapper extends AbstractFieldMapper implements AllFieldMapper.IncludeInAll {
+public abstract class NumberFieldMapper extends FieldMapper implements AllFieldMapper.IncludeInAll {
 
-    public static class Defaults extends AbstractFieldMapper.Defaults {
+    public static class Defaults {
         
         public static final int PRECISION_STEP_8_BIT  = Integer.MAX_VALUE; // 1tpv: 256 terms at most, not useful
         public static final int PRECISION_STEP_16_BIT = 8;                 // 2tpv
@@ -71,7 +64,7 @@ public abstract class NumberFieldMapper extends AbstractFieldMapper implements A
         public static final Explicit<Boolean> COERCE = new Explicit<>(true, false);
     }
 
-    public abstract static class Builder<T extends Builder, Y extends NumberFieldMapper> extends AbstractFieldMapper.Builder<T, Y> {
+    public abstract static class Builder<T extends Builder, Y extends NumberFieldMapper> extends FieldMapper.Builder<T, Y> {
 
         private Boolean ignoreMalformed;
 
@@ -135,12 +128,12 @@ public abstract class NumberFieldMapper extends AbstractFieldMapper implements A
 
     public static abstract class NumberFieldType extends MappedFieldType {
 
-        public NumberFieldType() {
-            super(AbstractFieldMapper.Defaults.FIELD_TYPE);
+        public NumberFieldType(NumericType numericType) {
             setTokenized(false);
             setOmitNorms(true);
             setIndexOptions(IndexOptions.DOCS);
             setStoreTermVectors(false);
+            setNumericType(numericType);
         }
 
         protected NumberFieldType(NumberFieldType ref) {
@@ -158,7 +151,7 @@ public abstract class NumberFieldMapper extends AbstractFieldMapper implements A
         }
 
         @Override
-        public abstract Query fuzzyQuery(String value, Fuzziness fuzziness, int prefixLength, int maxExpansions, boolean transpositions);
+        public abstract Query fuzzyQuery(Object value, Fuzziness fuzziness, int prefixLength, int maxExpansions, boolean transpositions);
 
         @Override
         public boolean useTermQueryWithQueryString() {
@@ -184,47 +177,11 @@ public abstract class NumberFieldMapper extends AbstractFieldMapper implements A
      * otherwise for older indexes we must continue to write BINARY (for now)
      */
     protected final boolean useSortedNumericDocValues;
-    
-    private ThreadLocal<NumericTokenStream> tokenStream = new ThreadLocal<NumericTokenStream>() {
-        @Override
-        protected NumericTokenStream initialValue() {
-            return new NumericTokenStream(fieldType().numericPrecisionStep());
-        }
-    };
 
-    private static ThreadLocal<NumericTokenStream> tokenStream4 = new ThreadLocal<NumericTokenStream>() {
-        @Override
-        protected NumericTokenStream initialValue() {
-            return new NumericTokenStream(4);
-        }
-    };
-
-    private static ThreadLocal<NumericTokenStream> tokenStream8 = new ThreadLocal<NumericTokenStream>() {
-        @Override
-        protected NumericTokenStream initialValue() {
-            return new NumericTokenStream(8);
-        }
-    };
-    
-    private static ThreadLocal<NumericTokenStream> tokenStream16 = new ThreadLocal<NumericTokenStream>() {
-        @Override
-        protected NumericTokenStream initialValue() {
-            return new NumericTokenStream(16);
-        }
-    };
-
-    private static ThreadLocal<NumericTokenStream> tokenStreamMax = new ThreadLocal<NumericTokenStream>() {
-        @Override
-        protected NumericTokenStream initialValue() {
-            return new NumericTokenStream(Integer.MAX_VALUE);
-        }
-    };
-
-    protected NumberFieldMapper(MappedFieldType fieldType, Boolean docValues,
-                                Explicit<Boolean> ignoreMalformed, Explicit<Boolean> coerce, @Nullable Settings fieldDataSettings, Settings indexSettings,
+    protected NumberFieldMapper(String simpleName, MappedFieldType fieldType, MappedFieldType defaultFieldType,
+                                Explicit<Boolean> ignoreMalformed, Explicit<Boolean> coerce, Settings indexSettings,
                                 MultiFields multiFields, CopyTo copyTo) {
-        // LUCENE 4 UPGRADE: Since we can't do anything before the super call, we have to push the boost check down to subclasses
-        super(fieldType, docValues, fieldDataSettings, indexSettings, multiFields, copyTo);
+        super(simpleName, fieldType, defaultFieldType, indexSettings, multiFields, copyTo);
         this.ignoreMalformed = ignoreMalformed;
         this.coerce = coerce;
         this.useSortedNumericDocValues = Version.indexCreated(indexSettings).onOrAfter(Version.V_1_4_0_Beta1);
@@ -317,8 +274,14 @@ public abstract class NumberFieldMapper extends AbstractFieldMapper implements A
         if (!this.getClass().equals(mergeWith.getClass())) {
             return;
         }
-        if (!mergeResult.simulate()) {
-            NumberFieldMapper nfmMergeWith = (NumberFieldMapper) mergeWith;
+        NumberFieldMapper nfmMergeWith = (NumberFieldMapper) mergeWith;
+        if (this.fieldTypeRef.getNumAssociatedMappers() > 1 && mergeResult.updateAllTypes() == false) {
+            if (fieldType().numericPrecisionStep() != nfmMergeWith.fieldType().numericPrecisionStep()) {
+                mergeResult.addConflict("mapper [" + fieldType().names().fullName() + "] is used by multiple types. Set update_all_types to true to update precision_step across all types.");
+            }
+        }
+
+        if (mergeResult.simulate() == false && mergeResult.hasConflicts() == false) {
             this.includeInAll = nfmMergeWith.includeInAll;
             if (nfmMergeWith.ignoreMalformed.explicit()) {
                 this.ignoreMalformed = nfmMergeWith.ignoreMalformed;
@@ -329,34 +292,62 @@ public abstract class NumberFieldMapper extends AbstractFieldMapper implements A
         }
     }
 
-    @Override
-    public void close() {
-    }
-
-    protected NumericTokenStream popCachedStream() {
-        if (fieldType().numericPrecisionStep() == 4) {
-            return tokenStream4.get();
-        } else if (fieldType().numericPrecisionStep() == 8) {
-            return tokenStream8.get();
-        } else if (fieldType().numericPrecisionStep() == 16) {
-            return tokenStream16.get();
-        } else if (fieldType().numericPrecisionStep() == Integer.MAX_VALUE) {
-            return tokenStreamMax.get();
-        }
-        return tokenStream.get();
-    }
-
     // used to we can use a numeric field in a document that is then parsed twice!
     public abstract static class CustomNumericField extends Field {
 
-        protected final NumberFieldMapper mapper;
+        private ThreadLocal<NumericTokenStream> tokenStream = new ThreadLocal<NumericTokenStream>() {
+            @Override
+            protected NumericTokenStream initialValue() {
+                return new NumericTokenStream(fieldType().numericPrecisionStep());
+            }
+        };
 
-        public CustomNumericField(NumberFieldMapper mapper, Number value, MappedFieldType fieldType) {
-            super(mapper.fieldType().names().indexName(), fieldType);
-            this.mapper = mapper;
+        private static ThreadLocal<NumericTokenStream> tokenStream4 = new ThreadLocal<NumericTokenStream>() {
+            @Override
+            protected NumericTokenStream initialValue() {
+                return new NumericTokenStream(4);
+            }
+        };
+
+        private static ThreadLocal<NumericTokenStream> tokenStream8 = new ThreadLocal<NumericTokenStream>() {
+            @Override
+            protected NumericTokenStream initialValue() {
+                return new NumericTokenStream(8);
+            }
+        };
+
+        private static ThreadLocal<NumericTokenStream> tokenStream16 = new ThreadLocal<NumericTokenStream>() {
+            @Override
+            protected NumericTokenStream initialValue() {
+                return new NumericTokenStream(16);
+            }
+        };
+
+        private static ThreadLocal<NumericTokenStream> tokenStreamMax = new ThreadLocal<NumericTokenStream>() {
+            @Override
+            protected NumericTokenStream initialValue() {
+                return new NumericTokenStream(Integer.MAX_VALUE);
+            }
+        };
+
+        public CustomNumericField(Number value, MappedFieldType fieldType) {
+            super(fieldType.names().indexName(), fieldType);
             if (value != null) {
                 this.fieldsData = value;
             }
+        }
+
+        protected NumericTokenStream getCachedStream() {
+            if (fieldType().numericPrecisionStep() == 4) {
+                return tokenStream4.get();
+            } else if (fieldType().numericPrecisionStep() == 8) {
+                return tokenStream8.get();
+            } else if (fieldType().numericPrecisionStep() == 16) {
+                return tokenStream16.get();
+            } else if (fieldType().numericPrecisionStep() == Integer.MAX_VALUE) {
+                return tokenStreamMax.get();
+            }
+            return tokenStream.get();
         }
 
         @Override

@@ -20,7 +20,6 @@
 package org.elasticsearch.index.mapper.internal;
 
 import com.google.common.base.Objects;
-
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.index.IndexOptions;
@@ -43,15 +42,13 @@ import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
-import org.elasticsearch.index.fielddata.FieldDataType;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.MergeMappingException;
 import org.elasticsearch.index.mapper.MergeResult;
+import org.elasticsearch.index.mapper.MetadataFieldMapper;
 import org.elasticsearch.index.mapper.ParseContext;
-import org.elasticsearch.index.mapper.RootMapper;
-import org.elasticsearch.index.mapper.core.AbstractFieldMapper;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -63,18 +60,17 @@ import java.util.Map;
 
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeBooleanValue;
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeStringValue;
-import static org.elasticsearch.index.mapper.MapperBuilders.source;
 
 /**
  *
  */
-public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper {
+public class SourceFieldMapper extends MetadataFieldMapper {
 
     public static final String NAME = "_source";
 
     public static final String CONTENT_TYPE = "_source";
 
-    public static class Defaults extends AbstractFieldMapper.Defaults {
+    public static class Defaults {
         public static final String NAME = SourceFieldMapper.NAME;
         public static final boolean ENABLED = true;
         public static final long COMPRESS_THRESHOLD = -1;
@@ -94,7 +90,7 @@ public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper
 
     }
 
-    public static class Builder extends Mapper.Builder<Builder, SourceFieldMapper> {
+    public static class Builder extends MetadataFieldMapper.Builder<Builder, SourceFieldMapper> {
 
         private boolean enabled = Defaults.ENABLED;
 
@@ -108,7 +104,7 @@ public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper
         private String[] excludes = null;
 
         public Builder() {
-            super(Defaults.NAME);
+            super(Defaults.NAME, Defaults.FIELD_TYPE);
         }
 
         public Builder enabled(boolean enabled) {
@@ -150,7 +146,7 @@ public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper
     public static class TypeParser implements Mapper.TypeParser {
         @Override
         public Mapper.Builder parse(String name, Map<String, Object> node, ParserContext parserContext) throws MapperParsingException {
-            SourceFieldMapper.Builder builder = source();
+            Builder builder = new Builder();
 
             for (Iterator<Map.Entry<String, Object>> iterator = node.entrySet().iterator(); iterator.hasNext();) {
                 Map.Entry<String, Object> entry = iterator.next();
@@ -159,12 +155,12 @@ public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper
                 if (fieldName.equals("enabled")) {
                     builder.enabled(nodeBooleanValue(fieldNode));
                     iterator.remove();
-                } else if (fieldName.equals("compress") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+                } else if (fieldName.equals("compress") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                     if (fieldNode != null) {
                         builder.compress(nodeBooleanValue(fieldNode));
                     }
                     iterator.remove();
-                } else if (fieldName.equals("compress_threshold") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+                } else if (fieldName.equals("compress_threshold") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                     if (fieldNode != null) {
                         if (fieldNode instanceof Number) {
                             builder.compressThreshold(((Number) fieldNode).longValue());
@@ -202,9 +198,7 @@ public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper
 
     static final class SourceFieldType extends MappedFieldType {
 
-        public SourceFieldType() {
-            super(AbstractFieldMapper.Defaults.FIELD_TYPE);
-        }
+        public SourceFieldType() {}
 
         protected SourceFieldType(SourceFieldType ref) {
             super(ref);
@@ -213,6 +207,11 @@ public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper
         @Override
         public MappedFieldType clone() {
             return new SourceFieldType(this);
+        }
+
+        @Override
+        public String typeName() {
+            return CONTENT_TYPE;
         }
 
         @Override
@@ -255,7 +254,7 @@ public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper
 
     protected SourceFieldMapper(boolean enabled, String format, Boolean compress, long compressThreshold,
                                 String[] includes, String[] excludes, Settings indexSettings) {
-        super(Defaults.FIELD_TYPE.clone(), false, null, indexSettings); // Only stored.
+        super(NAME, Defaults.FIELD_TYPE.clone(), Defaults.FIELD_TYPE, indexSettings); // Only stored.
         this.enabled = enabled;
         this.compress = compress;
         this.compressThreshold = compressThreshold;
@@ -281,16 +280,6 @@ public class SourceFieldMapper extends AbstractFieldMapper implements RootMapper
 
     public boolean isComplete() {
         return complete;
-    }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return Defaults.FIELD_TYPE;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return null;
     }
 
     @Override

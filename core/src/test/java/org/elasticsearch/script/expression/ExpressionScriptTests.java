@@ -29,9 +29,11 @@ import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.action.update.UpdateRequestBuilder;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
+import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.index.query.functionscore.ScoreFunctionBuilder;
 import org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders;
+import org.elasticsearch.script.CompiledScript;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptException;
 import org.elasticsearch.script.ScriptService.ScriptType;
@@ -53,7 +55,7 @@ import java.util.Map;
 
 import static org.elasticsearch.search.aggregations.AggregationBuilders.histogram;
 import static org.elasticsearch.search.aggregations.AggregationBuilders.sum;
-import static org.elasticsearch.search.aggregations.pipeline.PipelineAggregatorBuilders.seriesArithmetic;
+import static org.elasticsearch.search.aggregations.pipeline.PipelineAggregatorBuilders.bucketScript;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertSearchResponse;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
@@ -414,8 +416,9 @@ public class ExpressionScriptTests extends ElasticsearchIntegrationTest {
         vars.put("xyz", -1);
 
         Expression expr = JavascriptCompiler.compile("a+b+xyz");
+        CompiledScript compiledScript = new CompiledScript(ScriptType.INLINE, "", "expression", expr);
 
-        ExpressionExecutableScript ees = new ExpressionExecutableScript(expr, vars);
+        ExpressionExecutableScript ees = new ExpressionExecutableScript(compiledScript, vars);
         assertEquals((Double) ees.run(), 4.5, 0.001);
 
         ees.setNextVar("b", -2.5);
@@ -431,7 +434,7 @@ public class ExpressionScriptTests extends ElasticsearchIntegrationTest {
         try {
             vars = new HashMap<>();
             vars.put("a", 1);
-            ees = new ExpressionExecutableScript(expr, vars);
+            ees = new ExpressionExecutableScript(compiledScript, vars);
             ees.run();
             fail("An incorrect number of variables were allowed to be used in an expression.");
         } catch (ScriptException se) {
@@ -444,7 +447,7 @@ public class ExpressionScriptTests extends ElasticsearchIntegrationTest {
             vars.put("a", 1);
             vars.put("b", 3);
             vars.put("c", -1);
-            ees = new ExpressionExecutableScript(expr, vars);
+            ees = new ExpressionExecutableScript(compiledScript, vars);
             ees.run();
             fail("A variable was allowed to be set that does not exist in the expression.");
         } catch (ScriptException se) {
@@ -457,7 +460,7 @@ public class ExpressionScriptTests extends ElasticsearchIntegrationTest {
             vars.put("a", 1);
             vars.put("b", 3);
             vars.put("xyz", "hello");
-            ees = new ExpressionExecutableScript(expr, vars);
+            ees = new ExpressionExecutableScript(compiledScript, vars);
             ees.run();
             fail("A non-number was allowed to be use in the expression.");
         } catch (ScriptException se) {
@@ -533,7 +536,7 @@ public class ExpressionScriptTests extends ElasticsearchIntegrationTest {
                                 .subAggregation(sum("threeSum").field("three"))
                                 .subAggregation(sum("fourSum").field("four"))
                                 .subAggregation(
-                                        seriesArithmetic("totalSum").setBucketsPaths("twoSum", "threeSum", "fourSum").script(
+                                        bucketScript("totalSum").setBucketsPaths("twoSum", "threeSum", "fourSum").script(
                                                 new Script("_value0 + _value1 + _value2", ScriptType.INLINE, ExpressionScriptEngineService.NAME, null)))).execute().actionGet();
 
         InternalHistogram<Bucket> histogram = response.getAggregations().get("histogram");

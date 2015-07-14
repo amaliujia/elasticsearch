@@ -37,7 +37,7 @@ import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentParser.NumberType;
 import org.elasticsearch.common.xcontent.XContentParser.Token;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
-import org.elasticsearch.index.fielddata.FieldDataType;
+import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperException;
@@ -66,11 +66,11 @@ import static org.elasticsearch.index.mapper.core.TypeParsers.parseMultiField;
 /**
  *
  */
-public class CompletionFieldMapper extends AbstractFieldMapper {
+public class CompletionFieldMapper extends FieldMapper {
 
     public static final String CONTENT_TYPE = "completion";
 
-    public static class Defaults extends AbstractFieldMapper.Defaults {
+    public static class Defaults {
         public static final CompletionFieldType FIELD_TYPE = new CompletionFieldType();
 
         static {
@@ -104,7 +104,7 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
     public static final Set<String> ALLOWED_CONTENT_FIELD_NAMES = Sets.newHashSet(Fields.CONTENT_FIELD_NAME_INPUT,
             Fields.CONTENT_FIELD_NAME_OUTPUT, Fields.CONTENT_FIELD_NAME_PAYLOAD, Fields.CONTENT_FIELD_NAME_WEIGHT, Fields.CONTEXT);
 
-    public static class Builder extends AbstractFieldMapper.Builder<Builder, CompletionFieldMapper> {
+    public static class Builder extends FieldMapper.Builder<Builder, CompletionFieldMapper> {
 
         private boolean preserveSeparators = Defaults.DEFAULT_PRESERVE_SEPARATORS;
         private boolean payloads = Defaults.DEFAULT_HAS_PAYLOADS;
@@ -151,7 +151,7 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
             CompletionFieldType completionFieldType = (CompletionFieldType)fieldType;
             completionFieldType.setProvider(new AnalyzingCompletionLookupProvider(preserveSeparators, false, preservePositionIncrements, payloads));
             completionFieldType.setContextMapping(contextMapping);
-            return new CompletionFieldMapper(fieldType, maxInputLength, context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
+            return new CompletionFieldMapper(name, fieldType, maxInputLength, context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
         }
 
     }
@@ -171,23 +171,23 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
                     continue;
                 }
                 if (Fields.ANALYZER.equals(fieldName) || // index_analyzer is for backcompat, remove for v3.0
-                    fieldName.equals("index_analyzer") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+                    fieldName.equals("index_analyzer") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                     
                     indexAnalyzer = getNamedAnalyzer(parserContext, fieldNode.toString());
                     iterator.remove();
-                } else if (Fields.SEARCH_ANALYZER.match(fieldName)) {
+                } else if (parserContext.parseFieldMatcher().match(fieldName, Fields.SEARCH_ANALYZER)) {
                     searchAnalyzer = getNamedAnalyzer(parserContext, fieldNode.toString());
                     iterator.remove();
                 } else if (fieldName.equals(Fields.PAYLOADS)) {
                     builder.payloads(Boolean.parseBoolean(fieldNode.toString()));
                     iterator.remove();
-                } else if (Fields.PRESERVE_SEPARATORS.match(fieldName)) {
+                } else if (parserContext.parseFieldMatcher().match(fieldName, Fields.PRESERVE_SEPARATORS)) {
                     builder.preserveSeparators(Boolean.parseBoolean(fieldNode.toString()));
                     iterator.remove();
-                } else if (Fields.PRESERVE_POSITION_INCREMENTS.match(fieldName)) {
+                } else if (parserContext.parseFieldMatcher().match(fieldName, Fields.PRESERVE_POSITION_INCREMENTS)) {
                     builder.preservePositionIncrements(Boolean.parseBoolean(fieldNode.toString()));
                     iterator.remove();
-                } else if (Fields.MAX_INPUT_LENGTH.match(fieldName)) {
+                } else if (parserContext.parseFieldMatcher().match(fieldName, Fields.MAX_INPUT_LENGTH)) {
                     builder.maxInputLength(Integer.parseInt(fieldNode.toString()));
                     iterator.remove();
                 } else if (parseMultiField(builder, name, parserContext, fieldName, fieldNode)) {
@@ -227,7 +227,7 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
         private SortedMap<String, ContextMapping> contextMapping = ContextMapping.EMPTY_MAPPING;
 
         public CompletionFieldType() {
-            super(AbstractFieldMapper.Defaults.FIELD_TYPE);
+            setFieldDataType(null);
         }
 
         protected CompletionFieldType(CompletionFieldType ref) {
@@ -243,8 +243,13 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
         }
 
         @Override
-        public void checkCompatibility(MappedFieldType fieldType, List<String> conflicts) {
-            super.checkCompatibility(fieldType, conflicts);
+        public String typeName() {
+            return CONTENT_TYPE;
+        }
+
+        @Override
+        public void checkCompatibility(MappedFieldType fieldType, List<String> conflicts, boolean strict) {
+            super.checkCompatibility(fieldType, conflicts, strict);
             CompletionFieldType other = (CompletionFieldType)fieldType;
             if (analyzingSuggestLookupProvider.hasPayloads() != other.analyzingSuggestLookupProvider.hasPayloads()) {
                 conflicts.add("mapper [" + names().fullName() + "] has different payload values");
@@ -308,8 +313,8 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
 
     private int maxInputLength;
 
-    public CompletionFieldMapper(MappedFieldType fieldType, int maxInputLength, Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
-        super(fieldType, false, null, indexSettings, multiFields, copyTo);
+    public CompletionFieldMapper(String simpleName, MappedFieldType fieldType, int maxInputLength, Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
+        super(simpleName, fieldType, Defaults.FIELD_TYPE, indexSettings, multiFields, copyTo);
         this.maxInputLength = maxInputLength;
     }
 
@@ -352,7 +357,7 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
                             String name = parser.text();
                             ContextMapping mapping = fieldType().getContextMapping().get(name);
                             if (mapping == null) {
-                                throw new ElasticsearchParseException("context [" + name + "] is not defined");
+                                throw new ElasticsearchParseException("context [{}] is not defined", name);
                             } else {
                                 token = parser.nextToken();
                                 configs.put(name, mapping.parseContext(context, parser));
@@ -502,7 +507,7 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
     
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.startObject(fieldType().names().shortName())
+        builder.startObject(simpleName())
                 .field(Fields.TYPE, CONTENT_TYPE);
         
         builder.field(Fields.ANALYZER, fieldType().indexAnalyzer().name());
@@ -533,16 +538,6 @@ public class CompletionFieldMapper extends AbstractFieldMapper {
     @Override
     protected String contentType() {
         return CONTENT_TYPE;
-    }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return Defaults.FIELD_TYPE;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return null;
     }
 
     public boolean isStoringPayloads() {

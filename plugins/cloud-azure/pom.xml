@@ -15,22 +15,21 @@ governing permissions and limitations under the License. -->
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>org.elasticsearch.plugin</groupId>
-    <artifactId>elasticsearch-cloud-azure</artifactId>
+    <parent>
+        <groupId>org.elasticsearch.plugin</groupId>
+        <artifactId>elasticsearch-plugin</artifactId>
+        <version>2.0.0-beta1-SNAPSHOT</version>
+    </parent>
 
-    <packaging>jar</packaging>
+    <artifactId>elasticsearch-cloud-azure</artifactId>
     <name>Elasticsearch Azure cloud plugin</name>
     <description>The Azure Cloud plugin allows to use Azure API for the unicast discovery mechanism and add Azure storage repositories.</description>
-
-    <parent>
-        <groupId>org.elasticsearch</groupId>
-        <artifactId>elasticsearch-plugin</artifactId>
-        <version>2.0.0-SNAPSHOT</version>
-    </parent>
 
     <properties>
         <!-- You can add any specific project property here -->
         <tests.jvms>1</tests.jvms>
+        <tests.rest.suite>cloud_azure</tests.rest.suite>
+        <tests.rest.load_packaged>false</tests.rest.load_packaged>
     </properties>
 
     <dependencies>
@@ -44,11 +43,24 @@ governing permissions and limitations under the License. -->
             <groupId>com.microsoft.azure</groupId>
             <artifactId>azure-management-compute</artifactId>
             <version>0.7.0</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>stax</groupId>
+                    <artifactId>stax-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>com.microsoft.azure</groupId>
             <artifactId>azure-management</artifactId>
             <version>0.7.0</version>
+        </dependency>
+        <!-- We need to force here the compile scope as it was defined as test scope in plugins/pom.xml -->
+        <!-- TODO: remove this dependency when we will have a REST Test module -->
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpclient</artifactId>
+            <scope>compile</scope>
         </dependency>
     </dependencies>
 

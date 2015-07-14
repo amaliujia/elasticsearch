@@ -20,25 +20,17 @@
 package org.elasticsearch.index.mapper;
 
 import com.google.common.base.Strings;
-import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.queries.TermsQuery;
-import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.FuzzyQuery;
-import org.apache.lucene.search.MultiTermQuery;
-import org.apache.lucene.search.PrefixQuery;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.search.RegexpQuery;
-import org.apache.lucene.search.TermQuery;
-import org.apache.lucene.search.TermRangeQuery;
+import org.apache.lucene.search.*;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.action.fieldstats.FieldStats;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.lucene.BytesRefs;
-import org.elasticsearch.common.lucene.search.Queries;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.Fuzziness;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
 import org.elasticsearch.index.fielddata.FieldDataType;
@@ -52,11 +44,9 @@ import java.util.Objects;
 /**
  * This defines the core properties and functions to operate on a field.
  */
-public class MappedFieldType extends FieldType {
+public abstract class MappedFieldType extends FieldType {
 
     public static class Names {
-
-        private final String shortName;
 
         private final String indexName;
 
@@ -65,21 +55,13 @@ public class MappedFieldType extends FieldType {
         private final String fullName;
 
         public Names(String name) {
-            this(name, name, name, name);
+            this(name, name, name);
         }
 
-        public Names(String shortName, String indexName, String originalIndexName, String fullName) {
-            this.shortName = shortName;
+        public Names(String indexName, String originalIndexName, String fullName) {
             this.indexName = indexName;
             this.originalIndexName = originalIndexName;
             this.fullName = fullName;
-        }
-
-        /**
-         * The logical name of the field.
-         */
-        public String shortName() {
-            return shortName;
         }
 
         /**
@@ -113,15 +95,13 @@ public class MappedFieldType extends FieldType {
             if (!fullName.equals(names.fullName)) return false;
             if (!indexName.equals(names.indexName)) return false;
             if (!originalIndexName.equals(names.originalIndexName)) return false;
-            if (!shortName.equals(names.shortName)) return false;
 
             return true;
         }
 
         @Override
         public int hashCode() {
-            int result = shortName.hashCode();
-            result = 31 * result + indexName.hashCode();
+            int result = indexName.hashCode();
             result = 31 * result + originalIndexName.hashCode();
             result = 31 * result + fullName.hashCode();
             return result;
@@ -196,11 +176,17 @@ public class MappedFieldType extends FieldType {
         this.nullValueAsString = ref.nullValueAsString();
     }
 
-    public MappedFieldType() {}
-
-    public MappedFieldType clone() {
-        return new MappedFieldType(this);
+    public MappedFieldType() {
+        setTokenized(true);
+        setStored(false);
+        setStoreTermVectors(false);
+        setOmitNorms(false);
+        setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS);
+        setBoost(1.0f);
+        fieldDataType = new FieldDataType(typeName());
     }
+
+    public abstract MappedFieldType clone();
 
     @Override
     public boolean equals(Object o) {
@@ -226,10 +212,24 @@ public class MappedFieldType extends FieldType {
 
 // norelease: we need to override freeze() and add safety checks that all settings are actually set
 
+    /** Returns the name of this type, as would be specified in mapping properties */
+    public abstract String typeName();
+
+    /** Checks this type is the same type as other. Adds a conflict if they are different. */
+    public final void checkTypeName(MappedFieldType other, List<String> conflicts) {
+        if (typeName().equals(other.typeName()) == false) {
+            conflicts.add("mapper [" + names().fullName() + "] cannot be changed from type [" + typeName() + "] to [" + other.typeName() + "]");
+        } else if (getClass() != other.getClass()) {
+            throw new IllegalStateException("Type names equal for class " + getClass().getSimpleName() + " and " + other.getClass().getSimpleName());
+        }
+    }
+
     /**
      * Checks for any conflicts between this field type and other.
+     * If strict is true, all properties must be equal.
+     * Otherwise, only properties which must never change in an index are checked.
      */
-    public void checkCompatibility(MappedFieldType other, List<String> conflicts) {
+    public void checkCompatibility(MappedFieldType other, List<String> conflicts, boolean strict) {
         boolean indexed =  indexOptions() != IndexOptions.NONE;
         boolean mergeWithIndexed = other.indexOptions() != IndexOptions.NONE;
         // TODO: should be validating if index options go "up" (but "down" is ok)
@@ -240,7 +240,7 @@ public class MappedFieldType extends FieldType {
             conflicts.add("mapper [" + names().fullName() + "] has different store values");
         }
         if (hasDocValues() == false && other.hasDocValues()) {
-            // don't add conflict if this mapper has doc values while the mapper to merge doesn't since doc values are implicitely set
+            // don't add conflict if this mapper has doc values while the mapper to merge doesn't since doc values are implicitly set
             // when the doc_values field data format is configured
             conflicts.add("mapper [" + names().fullName() + "] has different doc_values values");
         }
@@ -277,9 +277,29 @@ public class MappedFieldType extends FieldType {
         if (!names().equals(other.names())) {
             conflicts.add("mapper [" + names().fullName() + "] has different index_name");
         }
-
         if (Objects.equals(similarity(), other.similarity()) == false) {
             conflicts.add("mapper [" + names().fullName() + "] has different similarity");
+        }
+
+        if (strict) {
+            if (omitNorms() != other.omitNorms()) {
+                conflicts.add("mapper [" + names().fullName() + "] is used by multiple types. Set update_all_types to true to update [omit_norms] across all types.");
+            }
+            if (boost() != other.boost()) {
+                conflicts.add("mapper [" + names().fullName() + "] is used by multiple types. Set update_all_types to true to update [boost] across all types.");
+            }
+            if (normsLoading() != other.normsLoading()) {
+                conflicts.add("mapper [" + names().fullName() + "] is used by multiple types. Set update_all_types to true to update [norms].loading across all types.");
+            }
+            if (Objects.equals(searchAnalyzer(), other.searchAnalyzer()) == false) {
+                conflicts.add("mapper [" + names().fullName() + "] is used by multiple types. Set update_all_types to true to update [search_analyzer] across all types.");
+            }
+            if (Objects.equals(fieldDataType(), other.fieldDataType()) == false) {
+                conflicts.add("mapper [" + names().fullName() + "] is used by multiple types. Set update_all_types to true to update [fielddata] across all types.");
+            }
+            if (Objects.equals(nullValue(), other.nullValue()) == false) {
+                conflicts.add("mapper [" + names().fullName() + "] is used by multiple types. Set update_all_types to true to update [null_value] across all types.");
+            }
         }
     }
 
@@ -436,8 +456,8 @@ public class MappedFieldType extends FieldType {
             includeLower, includeUpper);
     }
 
-    public Query fuzzyQuery(String value, Fuzziness fuzziness, int prefixLength, int maxExpansions, boolean transpositions) {
-        return new FuzzyQuery(createTerm(value), fuzziness.asDistance(value), prefixLength, maxExpansions, transpositions);
+    public Query fuzzyQuery(Object value, Fuzziness fuzziness, int prefixLength, int maxExpansions, boolean transpositions) {
+        return new FuzzyQuery(createTerm(value), fuzziness.asDistance(BytesRefs.toString(value)), prefixLength, maxExpansions, transpositions);
     }
 
     public Query prefixQuery(Object value, @Nullable MultiTermQuery.RewriteMethod method, @Nullable QueryParseContext context) {

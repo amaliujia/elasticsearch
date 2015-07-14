@@ -28,7 +28,6 @@ import org.elasticsearch.common.geo.GeoPoint;
 import org.elasticsearch.common.geo.builders.ShapeBuilder;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.index.fielddata.FieldDataType;
 import org.elasticsearch.index.mapper.ContentPath;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
@@ -37,7 +36,6 @@ import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.MergeMappingException;
 import org.elasticsearch.index.mapper.MergeResult;
 import org.elasticsearch.index.mapper.ParseContext;
-import org.elasticsearch.index.mapper.core.AbstractFieldMapper;
 import org.elasticsearch.index.mapper.core.BinaryFieldMapper;
 import org.elasticsearch.index.mapper.core.BooleanFieldMapper;
 import org.elasticsearch.index.mapper.geo.GeoPointFieldMapper;
@@ -60,7 +58,7 @@ import static org.elasticsearch.index.mapper.core.TypeParsers.parseMultiField;
  * .point GeoPoint type
  * .shape GeoShape type
  */
-public class ExternalMapper extends AbstractFieldMapper {
+public class ExternalMapper extends FieldMapper {
 
     public static class Names {
         public static final String FIELD_BIN = "bin";
@@ -69,7 +67,7 @@ public class ExternalMapper extends AbstractFieldMapper {
         public static final String FIELD_SHAPE = "shape";
     }
 
-    public static class Builder extends AbstractFieldMapper.Builder<Builder, ExternalMapper> {
+    public static class Builder extends FieldMapper.Builder<Builder, ExternalMapper> {
 
         private BinaryFieldMapper.Builder binBuilder = new BinaryFieldMapper.Builder(Names.FIELD_BIN);
         private BooleanFieldMapper.Builder boolBuilder = new BooleanFieldMapper.Builder(Names.FIELD_BOOL);
@@ -80,7 +78,7 @@ public class ExternalMapper extends AbstractFieldMapper {
         private String mapperName;
 
         public Builder(String name, String generatedValue, String mapperName) {
-            super(name, Defaults.FIELD_TYPE);
+            super(name, new ExternalFieldType());
             this.builder = this;
             this.stringBuilder = stringField(name).store(false);
             this.generatedValue = generatedValue;
@@ -108,7 +106,7 @@ public class ExternalMapper extends AbstractFieldMapper {
             context.path().pathType(origPathType);
             setupFieldType(context);
 
-            return new ExternalMapper(fieldType, generatedValue, mapperName, binMapper, boolMapper, pointMapper, shapeMapper, stringMapper,
+            return new ExternalMapper(name, fieldType, generatedValue, mapperName, binMapper, boolMapper, pointMapper, shapeMapper, stringMapper,
                     context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
         }
     }
@@ -142,6 +140,25 @@ public class ExternalMapper extends AbstractFieldMapper {
         }
     }
 
+    static class ExternalFieldType extends MappedFieldType {
+
+        public ExternalFieldType() {}
+
+        protected ExternalFieldType(ExternalFieldType ref) {
+            super(ref);
+        }
+
+        @Override
+        public MappedFieldType clone() {
+            return new ExternalFieldType(this);
+        }
+
+        @Override
+        public String typeName() {
+            return "faketype";
+        }
+    }
+
     private final String generatedValue;
     private final String mapperName;
 
@@ -151,12 +168,11 @@ public class ExternalMapper extends AbstractFieldMapper {
     private final GeoShapeFieldMapper shapeMapper;
     private final FieldMapper stringMapper;
 
-    public ExternalMapper(MappedFieldType fieldType,
+    public ExternalMapper(String simpleName, MappedFieldType fieldType,
                           String generatedValue, String mapperName,
                           BinaryFieldMapper binMapper, BooleanFieldMapper boolMapper, GeoPointFieldMapper pointMapper,
                           GeoShapeFieldMapper shapeMapper, FieldMapper stringMapper, Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
-        super(fieldType, false, null, indexSettings,
-                multiFields, copyTo);
+        super(simpleName, fieldType, new ExternalFieldType(), indexSettings, multiFields, copyTo);
         this.generatedValue = generatedValue;
         this.mapperName = mapperName;
         this.binMapper = binMapper;
@@ -164,16 +180,6 @@ public class ExternalMapper extends AbstractFieldMapper {
         this.pointMapper = pointMapper;
         this.shapeMapper = shapeMapper;
         this.stringMapper = stringMapper;
-    }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return Defaults.FIELD_TYPE;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return null;
     }
 
     @Override
@@ -218,17 +224,8 @@ public class ExternalMapper extends AbstractFieldMapper {
     }
 
     @Override
-    public void close() {
-        binMapper.close();
-        boolMapper.close();
-        pointMapper.close();
-        shapeMapper.close();
-        stringMapper.close();
-    }
-
-    @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.startObject(fieldType().names().shortName());
+        builder.startObject(simpleName());
         builder.field("type", mapperName);
         multiFields.toXContent(builder, params);
         builder.endObject();

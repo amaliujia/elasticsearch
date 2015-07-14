@@ -54,9 +54,7 @@ import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertDire
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertFileExists;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.not;
-import static org.hamcrest.Matchers.arrayWithSize;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.*;
 
 @ClusterScope(scope = Scope.TEST, numDataNodes = 0, transportClientRatio = 0.0)
 @LuceneTestCase.SuppressFileSystems("*") // TODO: clean up this test to allow extra files
@@ -118,6 +116,8 @@ public class PluginManagerTests extends ElasticsearchIntegrationTest {
                 PosixFileAttributes attributes = view.readAttributes();
                 assertTrue("unexpected permissions: " + attributes.permissions(),
                            attributes.permissions().contains(PosixFilePermission.OWNER_EXECUTE));
+                assertTrue("unexpected permissions: " + attributes.permissions(),
+                        attributes.permissions().contains(PosixFilePermission.OWNER_READ));
             }
         } finally {
             // we need to clean up the copied dirs
@@ -417,6 +417,7 @@ public class PluginManagerTests extends ElasticsearchIntegrationTest {
      */
     @Test
     @Network
+    @AwaitsFix(bugUrl = "fails with jar hell failures - http://build-us-00.elastic.co/job/es_core_master_oracle_6/519/testReport/")
     public void testInstallPluginWithElasticsearchDownloadService() throws IOException {
         assumeTrue("download.elastic.co is accessible", isDownloadServiceWorking("download.elastic.co", 80, "/elasticsearch/ci-test.txt"));
         singlePluginInstallAndRemove("elasticsearch/elasticsearch-transport-thrift/2.4.0", null);
@@ -430,6 +431,7 @@ public class PluginManagerTests extends ElasticsearchIntegrationTest {
      */
     @Test
     @Network
+    @AwaitsFix(bugUrl = "fails with jar hell failures - http://build-us-00.elastic.co/job/es_core_master_oracle_6/519/testReport/")
     public void testInstallPluginWithMavenCentral() throws IOException {
         assumeTrue("search.maven.org is accessible", isDownloadServiceWorking("search.maven.org", 80, "/"));
         assumeTrue("repo1.maven.org is accessible", isDownloadServiceWorking("repo1.maven.org", 443, "/maven2/org/elasticsearch/elasticsearch-transport-thrift/2.4.0/elasticsearch-transport-thrift-2.4.0.pom"));
@@ -511,6 +513,27 @@ public class PluginManagerTests extends ElasticsearchIntegrationTest {
         }
     }
 
+    @Test
+    public void testOfficialPluginName_ThrowsException() throws IOException {
+        PluginManager.checkForOfficialPlugins("elasticsearch-analysis-icu");
+        PluginManager.checkForOfficialPlugins("elasticsearch-analysis-kuromoji");
+        PluginManager.checkForOfficialPlugins("elasticsearch-analysis-phonetic");
+        PluginManager.checkForOfficialPlugins("elasticsearch-analysis-smartcn");
+        PluginManager.checkForOfficialPlugins("elasticsearch-analysis-stempel");
+        PluginManager.checkForOfficialPlugins("elasticsearch-cloud-aws");
+        PluginManager.checkForOfficialPlugins("elasticsearch-cloud-azure");
+        PluginManager.checkForOfficialPlugins("elasticsearch-cloud-gce");
+        PluginManager.checkForOfficialPlugins("elasticsearch-delete-by-query");
+        PluginManager.checkForOfficialPlugins("elasticsearch-lang-javascript");
+        PluginManager.checkForOfficialPlugins("elasticsearch-lang-python");
+
+        try {
+            PluginManager.checkForOfficialPlugins("elasticsearch-mapper-attachment");
+            fail("elasticsearch-mapper-attachment should not be allowed");
+        } catch (IllegalArgumentException e) {
+            // We expect that error
+        }
+    }
 
     /**
      * Retrieve a URL string that represents the resource with the given {@code resourceName}.

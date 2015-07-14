@@ -27,11 +27,12 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentBuilderString;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
-public class PluginsInfo implements Streamable, Serializable, ToXContent {
+public class PluginsInfo implements Streamable, ToXContent {
     static final class Fields {
         static final XContentBuilderString PLUGINS = new XContentBuilderString("plugins");
     }
@@ -46,7 +47,17 @@ public class PluginsInfo implements Streamable, Serializable, ToXContent {
         infos = new ArrayList<>(size);
     }
 
+    /**
+     * @return an ordered list based on plugins name
+     */
     public List<PluginInfo> getInfos() {
+        Collections.sort(infos, new Comparator<PluginInfo>() {
+            @Override
+            public int compare(final PluginInfo o1, final PluginInfo o2) {
+                return o1.getName().compareTo(o2.getName());
+            }
+        });
+
         return infos;
     }
 
@@ -71,7 +82,7 @@ public class PluginsInfo implements Streamable, Serializable, ToXContent {
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeInt(infos.size());
-        for (PluginInfo plugin : infos) {
+        for (PluginInfo plugin : getInfos()) {
             plugin.writeTo(out);
         }
     }
@@ -79,7 +90,7 @@ public class PluginsInfo implements Streamable, Serializable, ToXContent {
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         builder.startArray(Fields.PLUGINS);
-        for (PluginInfo pluginInfo : infos) {
+        for (PluginInfo pluginInfo : getInfos()) {
             pluginInfo.toXContent(builder, params);
         }
         builder.endArray();

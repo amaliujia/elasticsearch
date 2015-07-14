@@ -43,12 +43,9 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
 import org.elasticsearch.index.analysis.NumericFloatAnalyzer;
-import org.elasticsearch.index.fielddata.FieldDataType;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
-import org.elasticsearch.index.mapper.MergeMappingException;
-import org.elasticsearch.index.mapper.MergeResult;
 import org.elasticsearch.index.mapper.ParseContext;
 import org.elasticsearch.index.query.QueryParseContext;
 
@@ -87,8 +84,8 @@ public class FloatFieldMapper extends NumberFieldMapper {
         @Override
         public FloatFieldMapper build(BuilderContext context) {
             setupFieldType(context);
-            FloatFieldMapper fieldMapper = new FloatFieldMapper(fieldType, docValues, ignoreMalformed(context), coerce(context),
-                    fieldDataSettings, context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
+            FloatFieldMapper fieldMapper = new FloatFieldMapper(name, fieldType, defaultFieldType, ignoreMalformed(context), coerce(context),
+                    context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
             fieldMapper.includeInAll(includeInAll);
             return fieldMapper;
         }
@@ -127,7 +124,9 @@ public class FloatFieldMapper extends NumberFieldMapper {
 
     static final class FloatFieldType extends NumberFieldType {
 
-        public FloatFieldType() {}
+        public FloatFieldType() {
+            super(NumericType.FLOAT);
+        }
 
         protected FloatFieldType(FloatFieldType ref) {
             super(ref);
@@ -136,6 +135,11 @@ public class FloatFieldMapper extends NumberFieldMapper {
         @Override
         public NumberFieldType clone() {
             return new FloatFieldType(this);
+        }
+
+        @Override
+        public String typeName() {
+            return CONTENT_TYPE;
         }
 
         @Override
@@ -174,8 +178,8 @@ public class FloatFieldMapper extends NumberFieldMapper {
         }
 
         @Override
-        public Query fuzzyQuery(String value, Fuzziness fuzziness, int prefixLength, int maxExpansions, boolean transpositions) {
-            float iValue = Float.parseFloat(value);
+        public Query fuzzyQuery(Object value, Fuzziness fuzziness, int prefixLength, int maxExpansions, boolean transpositions) {
+            float iValue = parseValue(value);
             final float iSim = fuzziness.asFloat();
             return NumericRangeQuery.newFloatRange(names().indexName(), numericPrecisionStep(),
                 iValue - iSim,
@@ -193,25 +197,15 @@ public class FloatFieldMapper extends NumberFieldMapper {
         }
     }
 
-    protected FloatFieldMapper(MappedFieldType fieldType, Boolean docValues,
+    protected FloatFieldMapper(String simpleName, MappedFieldType fieldType, MappedFieldType defaultFieldType,
                                Explicit<Boolean> ignoreMalformed, Explicit<Boolean> coerce,
-                               @Nullable Settings fieldDataSettings, Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
-        super(fieldType, docValues, ignoreMalformed, coerce, fieldDataSettings, indexSettings, multiFields, copyTo);
+                               Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
+        super(simpleName, fieldType, defaultFieldType, ignoreMalformed, coerce, indexSettings, multiFields, copyTo);
     }
 
     @Override
     public FloatFieldType fieldType() {
         return (FloatFieldType) super.fieldType();
-    }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return Defaults.FIELD_TYPE;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return new FieldDataType("float");
     }
 
     private static float parseValue(Object value) {
@@ -300,7 +294,7 @@ public class FloatFieldMapper extends NumberFieldMapper {
         }
 
         if (fieldType().indexOptions() != IndexOptions.NONE || fieldType().stored()) {
-            CustomFloatNumericField field = new CustomFloatNumericField(this, value, fieldType());
+            CustomFloatNumericField field = new CustomFloatNumericField(value, fieldType());
             field.setBoost(boost);
             fields.add(field);
         }
@@ -346,18 +340,15 @@ public class FloatFieldMapper extends NumberFieldMapper {
 
         private final float number;
 
-        private final NumberFieldMapper mapper;
-
-        public CustomFloatNumericField(NumberFieldMapper mapper, float number, NumberFieldType fieldType) {
-            super(mapper, number, fieldType);
-            this.mapper = mapper;
+        public CustomFloatNumericField(float number, NumberFieldType fieldType) {
+            super(number, fieldType);
             this.number = number;
         }
 
         @Override
         public TokenStream tokenStream(Analyzer analyzer, TokenStream previous) throws IOException {
             if (fieldType().indexOptions() != IndexOptions.NONE) {
-                return mapper.popCachedStream().setFloatValue(number);
+                return getCachedStream().setFloatValue(number);
             }
             return null;
         }

@@ -193,7 +193,7 @@ public class MetaDataMappingService extends AbstractComponent {
                     // only add the current relevant mapping (if exists)
                     if (indexMetaData.mappings().containsKey(type)) {
                         // don't apply the default mapping, it has been applied when the mapping was created
-                        indexService.mapperService().merge(type, indexMetaData.mappings().get(type).source(), false);
+                        indexService.mapperService().merge(type, indexMetaData.mappings().get(type).source(), false, true);
                     }
                 }
             }
@@ -264,7 +264,7 @@ public class MetaDataMappingService extends AbstractComponent {
                         continue;
                     }
 
-                    DocumentMapper updatedMapper = indexService.mapperService().merge(type, mappingSource, false);
+                    DocumentMapper updatedMapper = indexService.mapperService().merge(type, mappingSource, false, true);
                     processedRefreshes.add(type);
 
                     // if we end up with the same mapping as the original once, ignore
@@ -361,11 +361,11 @@ public class MetaDataMappingService extends AbstractComponent {
                         indicesToClose.add(indexMetaData.index());
                         // make sure to add custom default mapping if exists
                         if (indexMetaData.mappings().containsKey(MapperService.DEFAULT_MAPPING)) {
-                            indexService.mapperService().merge(MapperService.DEFAULT_MAPPING, indexMetaData.mappings().get(MapperService.DEFAULT_MAPPING).source(), false);
+                            indexService.mapperService().merge(MapperService.DEFAULT_MAPPING, indexMetaData.mappings().get(MapperService.DEFAULT_MAPPING).source(), false, request.updateAllTypes());
                         }
                         // only add the current relevant mapping (if exists)
                         if (indexMetaData.mappings().containsKey(request.type())) {
-                            indexService.mapperService().merge(request.type(), indexMetaData.mappings().get(request.type()).source(), false);
+                            indexService.mapperService().merge(request.type(), indexMetaData.mappings().get(request.type()).source(), false, request.updateAllTypes());
                         }
                     }
 
@@ -383,7 +383,7 @@ public class MetaDataMappingService extends AbstractComponent {
                             newMapper = indexService.mapperService().parse(request.type(), new CompressedXContent(request.source()), existingMapper == null);
                             if (existingMapper != null) {
                                 // first, simulate
-                                MergeResult mergeResult = existingMapper.merge(newMapper.mapping(), true);
+                                MergeResult mergeResult = existingMapper.merge(newMapper.mapping(), true, request.updateAllTypes());
                                 // if we have conflicts, throw an exception
                                 if (mergeResult.hasConflicts()) {
                                     throw new MergeMappingException(mergeResult.buildConflicts());
@@ -396,7 +396,7 @@ public class MetaDataMappingService extends AbstractComponent {
                                 // For example in MapperService we can't distinguish between a create index api call
                                 // and a put mapping api call, so we don't which type did exist before.
                                 // Also the order of the mappings may be backwards.
-                                if (Version.indexCreated(indexService.getIndexSettings()).onOrAfter(Version.V_2_0_0) && newMapper.parentFieldMapper().active()) {
+                                if (Version.indexCreated(indexService.getIndexSettings()).onOrAfter(Version.V_2_0_0_beta1) && newMapper.parentFieldMapper().active()) {
                                     IndexMetaData indexMetaData = currentState.metaData().index(index);
                                     for (ObjectCursor<MappingMetaData> mapping : indexMetaData.mappings().values()) {
                                         if (newMapper.parentFieldMapper().type().equals(mapping.value.type())) {
@@ -438,7 +438,7 @@ public class MetaDataMappingService extends AbstractComponent {
                         if (existingMappers.containsKey(entry.getKey())) {
                             existingSource = existingMappers.get(entry.getKey()).mappingSource();
                         }
-                        DocumentMapper mergedMapper = indexService.mapperService().merge(newMapper.type(), newMapper.mappingSource(), false);
+                        DocumentMapper mergedMapper = indexService.mapperService().merge(newMapper.type(), newMapper.mappingSource(), false, request.updateAllTypes());
                         CompressedXContent updatedSource = mergedMapper.mappingSource();
 
                         if (existingSource != null) {

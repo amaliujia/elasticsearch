@@ -18,7 +18,6 @@
  */
 package org.elasticsearch.action.admin.cluster.node.info;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -28,9 +27,8 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentBuilderString;
 
 import java.io.IOException;
-import java.io.Serializable;
 
-public class PluginInfo implements Streamable, Serializable, ToXContent {
+public class PluginInfo implements Streamable, ToXContent {
     public static final String DESCRIPTION_NOT_AVAILABLE = "No description found.";
     public static final String VERSION_NOT_AVAILABLE = "NA";
 

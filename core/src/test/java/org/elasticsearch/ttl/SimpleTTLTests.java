@@ -39,7 +39,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.elasticsearch.common.settings.Settings.settingsBuilder;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.test.ElasticsearchIntegrationTest.*;
+import static org.elasticsearch.test.ElasticsearchIntegrationTest.Scope;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.*;
 
@@ -69,14 +69,14 @@ public class SimpleTTLTests extends ElasticsearchIntegrationTest {
                 .addMapping("type1", XContentFactory.jsonBuilder()
                         .startObject()
                         .startObject("type1")
-                        .startObject("_timestamp").field("enabled", true).field("store", "yes").endObject()
+                        .startObject("_timestamp").field("enabled", true).endObject()
                         .startObject("_ttl").field("enabled", true).endObject()
                         .endObject()
                         .endObject())
                 .addMapping("type2", XContentFactory.jsonBuilder()
                         .startObject()
                         .startObject("type2")
-                        .startObject("_timestamp").field("enabled", true).field("store", "yes").endObject()
+                        .startObject("_timestamp").field("enabled", true).endObject()
                         .startObject("_ttl").field("enabled", true).field("default", "1d").endObject()
                         .endObject()
                         .endObject()));

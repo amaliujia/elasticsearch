@@ -23,6 +23,8 @@ import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.env.Environment;
 
 import java.io.*;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.AccessMode;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
@@ -30,6 +32,10 @@ import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.security.Permissions;
 import java.security.Policy;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import java.util.regex.Pattern;
 
 /** 
  * Initializes securitymanager with necessary permissions.
@@ -44,14 +50,69 @@ final class Security {
      * Can only happen once!
      */
     static void configure(Environment environment) throws Exception {
+        // set properties for jar locations
+        setCodebaseProperties();
+
         // enable security policy: union of template and environment-based paths.
         Policy.setPolicy(new ESPolicy(createPermissions(environment)));
 
         // enable security manager
-        System.setSecurityManager(new SecurityManager());
+        System.setSecurityManager(new SecurityManager() {
+            // we disable this completely, because its granted otherwise:
+            // 'Note: The "exitVM.*" permission is automatically granted to
+            // all code loaded from the application class path, thus enabling
+            // applications to terminate themselves.'
+            @Override
+            public void checkExit(int status) {
+                throw new SecurityException("exit(" + status + ") not allowed by system policy");
+            }
+        });
 
         // do some basic tests
         selfTest();
+    }
+
+    // mapping of jars to codebase properties
+    // note that this is only read once, when policy is parsed.
+    private static final Map<Pattern,String> SPECIAL_JARS;
+    static {
+        Map<Pattern,String> m = new IdentityHashMap<>();
+        m.put(Pattern.compile(".*lucene-core-.*\\.jar$"),    "es.security.jar.lucene.core");
+        m.put(Pattern.compile(".*jsr166e-.*\\.jar$"),        "es.security.jar.twitter.jsr166e");
+        m.put(Pattern.compile(".*securemock-.*\\.jar$"),     "es.security.jar.elasticsearch.securemock");
+        m.put(Pattern.compile(".*bcprov-.*\\.jar$"),         "es.security.jar.bouncycastle.bcprov");
+        SPECIAL_JARS = Collections.unmodifiableMap(m);
+    }
+
+    /**
+     * Sets properties (codebase URLs) for policy files.
+     * JAR locations are not fixed so we have to find the locations of
+     * the ones we want.
+     */
+    @SuppressForbidden(reason = "proper use of URL")
+    static void setCodebaseProperties() {
+        ClassLoader loader = Security.class.getClassLoader();
+        if (loader instanceof URLClassLoader) {
+            for (URL url : ((URLClassLoader)loader).getURLs()) {
+                for (Map.Entry<Pattern,String> e : SPECIAL_JARS.entrySet()) {
+                    if (e.getKey().matcher(url.getPath()).matches()) {
+                        String prop = e.getValue();
+                        if (System.getProperty(prop) != null) {
+                            throw new IllegalStateException("property: " + prop + " is unexpectedly set: " + System.getProperty(prop));
+                        }
+                        System.setProperty(prop, url.toString());
+                    }
+                }
+            }
+            for (String prop : SPECIAL_JARS.values()) {
+                if (System.getProperty(prop) == null) {
+                    System.setProperty(prop, "file:/dev/null"); // no chance to be interpreted as "all"
+                }
+            }
+        } else {
+            // we could try to parse the classpath or something, but screw it for now.
+            throw new UnsupportedOperationException("Unsupported system classloader type: " + loader.getClass());
+        }
     }
 
     /** returns dynamic Permissions to configured paths */

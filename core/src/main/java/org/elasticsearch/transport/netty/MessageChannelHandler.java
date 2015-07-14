@@ -19,12 +19,12 @@
 
 package org.elasticsearch.transport.netty;
 
+import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.component.Lifecycle;
 import org.elasticsearch.common.compress.Compressor;
 import org.elasticsearch.common.compress.CompressorFactory;
 import org.elasticsearch.common.compress.NotCompressedException;
-import org.elasticsearch.common.io.ThrowableObjectInputStream;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
@@ -85,67 +85,87 @@ public class MessageChannelHandler extends SimpleChannelUpstreamHandler {
         // netty always copies a buffer, either in NioWorker in its read handler, where it copies to a fresh
         // buffer, or in the cumlation buffer, which is cleaned each time
         StreamInput streamIn = ChannelBufferStreamInputFactory.create(buffer, size);
+        boolean success = false;
+        try {
+            long requestId = streamIn.readLong();
+            byte status = streamIn.readByte();
+            Version version = Version.fromId(streamIn.readInt());
 
-        long requestId = buffer.readLong();
-        byte status = buffer.readByte();
-        Version version = Version.fromId(buffer.readInt());
-
-        StreamInput wrappedStream;
-        if (TransportStatus.isCompress(status) && hasMessageBytesToRead && buffer.readable()) {
-            Compressor compressor;
-            try {
-                compressor = CompressorFactory.compressor(buffer);
-            } catch (NotCompressedException ex) {
-                int maxToRead = Math.min(buffer.readableBytes(), 10);
-                int offset = buffer.readerIndex();
-                StringBuilder sb = new StringBuilder("stream marked as compressed, but no compressor found, first [").append(maxToRead).append("] content bytes out of [").append(buffer.readableBytes()).append("] readable bytes with message size [").append(size).append("] ").append("] are [");
-                for (int i = 0; i < maxToRead; i++) {
-                    sb.append(buffer.getByte(offset + i)).append(",");
+            if (TransportStatus.isCompress(status) && hasMessageBytesToRead && buffer.readable()) {
+                Compressor compressor;
+                try {
+                    compressor = CompressorFactory.compressor(buffer);
+                } catch (NotCompressedException ex) {
+                    int maxToRead = Math.min(buffer.readableBytes(), 10);
+                    int offset = buffer.readerIndex();
+                    StringBuilder sb = new StringBuilder("stream marked as compressed, but no compressor found, first [").append(maxToRead).append("] content bytes out of [").append(buffer.readableBytes()).append("] readable bytes with message size [").append(size).append("] ").append("] are [");
+                    for (int i = 0; i < maxToRead; i++) {
+                        sb.append(buffer.getByte(offset + i)).append(",");
+                    }
+                    sb.append("]");
+                    throw new IllegalStateException(sb.toString());
                 }
-                sb.append("]");
-                throw new IllegalStateException(sb.toString());
+                streamIn = compressor.streamInput(streamIn);
             }
-            wrappedStream = compressor.streamInput(streamIn);
-        } else {
-            wrappedStream = streamIn;
-        }
-        wrappedStream.setVersion(version);
+            streamIn.setVersion(version);
 
-        if (TransportStatus.isRequest(status)) {
-            String action = handleRequest(ctx.getChannel(), wrappedStream, requestId, version);
-            if (buffer.readerIndex() != expectedIndexReader) {
+            if (TransportStatus.isRequest(status)) {
+                String action = handleRequest(ctx.getChannel(), streamIn, requestId, version);
+
+                // Chek the entire message has been read
+                final int nextByte = streamIn.read();
+                // calling read() is useful to make sure the message is fully read, even if there some kind of EOS marker
+                if (nextByte != -1) {
+                    throw new IllegalStateException("Message not fully read (request) for requestId [" + requestId + "], action ["
+                            + action + "], readerIndex [" + buffer.readerIndex() + "] vs expected [" + expectedIndexReader + "]; resetting");
+                }
                 if (buffer.readerIndex() < expectedIndexReader) {
-                    logger.warn("Message not fully read (request) for requestId [{}], action [{}], readerIndex [{}] vs expected [{}]; resetting",
-                                requestId, action, buffer.readerIndex(), expectedIndexReader);
-                } else {
-                    logger.warn("Message read past expected size (request) for requestId=[{}], action [{}], readerIndex [{}] vs expected [{}]; resetting",
-                                requestId, action, buffer.readerIndex(), expectedIndexReader);
+                    throw new IllegalStateException("Message is fully read (request), yet there are " + (expectedIndexReader - buffer.readerIndex()) + " remaining bytes; resetting");
                 }
-                buffer.readerIndex(expectedIndexReader);
-            }
-        } else {
-            TransportResponseHandler handler = transportServiceAdapter.onResponseReceived(requestId);
-            // ignore if its null, the adapter logs it
-            if (handler != null) {
-                if (TransportStatus.isError(status)) {
-                    handlerResponseError(wrappedStream, handler);
-                } else {
-                    handleResponse(ctx.getChannel(), wrappedStream, handler);
+                if (buffer.readerIndex() > expectedIndexReader) {
+                    throw new IllegalStateException("Message read past expected size (request) for requestId [" + requestId + "], action ["
+                            + action + "], readerIndex [" + buffer.readerIndex() + "] vs expected [" + expectedIndexReader + "]; resetting");
                 }
+
             } else {
-                // if its null, skip those bytes
-                buffer.readerIndex(markedReaderIndex + size);
-            }
-            if (buffer.readerIndex() != expectedIndexReader) {
-                if (buffer.readerIndex() < expectedIndexReader) {
-                    logger.warn("Message not fully read (response) for [{}] handler {}, error [{}], resetting", requestId, handler, TransportStatus.isError(status));
-                } else {
-                    logger.warn("Message read past expected size (response) for [{}] handler {}, error [{}], resetting", requestId, handler, TransportStatus.isError(status));
+                TransportResponseHandler<?> handler = transportServiceAdapter.onResponseReceived(requestId);
+                // ignore if its null, the adapter logs it
+                if (handler != null) {
+                    if (TransportStatus.isError(status)) {
+                        handlerResponseError(streamIn, handler);
+                    } else {
+                        handleResponse(ctx.getChannel(), streamIn, handler);
+                    }
+
+                    // Chek the entire message has been read
+                    final int nextByte = streamIn.read();
+                    // calling read() is useful to make sure the message is fully read, even if there is an EOS marker
+                    if (nextByte != -1) {
+                        throw new IllegalStateException("Message not fully read (response) for requestId [" + requestId + "], handler ["
+                                + handler + "], error [" + TransportStatus.isError(status) + "]; resetting");
+                    }
+                    if (buffer.readerIndex() < expectedIndexReader) {
+                        throw new IllegalStateException("Message is fully read (response), yet there are " + (expectedIndexReader - buffer.readerIndex()) + " remaining bytes; resetting");
+                    }
+                    if (buffer.readerIndex() > expectedIndexReader) {
+                        throw new IllegalStateException("Message read past expected size (response) for requestId [" + requestId + "], handler ["
+                                + handler + "], error [" + TransportStatus.isError(status) + "]; resetting");
+                    }
+
                 }
+            }
+        } finally {
+            try {
+                if (success) {
+                    IOUtils.close(streamIn);
+                } else {
+                    IOUtils.closeWhileHandlingException(streamIn);
+                }
+            } finally {
+                // Set the expected position of the buffer, no matter what happened
                 buffer.readerIndex(expectedIndexReader);
             }
         }
-        wrappedStream.close();
     }
 
     protected void handleResponse(Channel channel, StreamInput buffer, final TransportResponseHandler handler) {
@@ -173,8 +193,7 @@ public class MessageChannelHandler extends SimpleChannelUpstreamHandler {
     private void handlerResponseError(StreamInput buffer, final TransportResponseHandler handler) {
         Throwable error;
         try {
-            ThrowableObjectInputStream ois = new ThrowableObjectInputStream(buffer, transport.settings().getClassLoader());
-            error = (Throwable) ois.readObject();
+            error = buffer.readThrowable();
         } catch (Throwable e) {
             error = new TransportSerializationException("Failed to deserialize exception response from stream", e);
         }

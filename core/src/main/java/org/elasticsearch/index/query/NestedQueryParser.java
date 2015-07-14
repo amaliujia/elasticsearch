@@ -71,7 +71,7 @@ public class NestedQueryParser implements QueryParser {
             } else if (token == XContentParser.Token.START_OBJECT) {
                 if ("query".equals(currentFieldName)) {
                     builder.query();
-                } else if (FILTER_FIELD.match(currentFieldName)) {
+                } else if (parseContext.parseFieldMatcher().match(currentFieldName, FILTER_FIELD)) {
                     builder.filter();
                 } else if ("inner_hits".equals(currentFieldName)) {
                     builder.setInnerHits(innerHitsQueryParserHelper.parse(parseContext));
@@ -87,6 +87,8 @@ public class NestedQueryParser implements QueryParser {
                     String sScoreMode = parser.text();
                     if ("avg".equals(sScoreMode)) {
                         scoreMode = ScoreMode.Avg;
+                    } else if ("min".equals(sScoreMode)) {
+                        scoreMode = ScoreMode.Min;
                     } else if ("max".equals(sScoreMode)) {
                         scoreMode = ScoreMode.Max;
                     } else if ("total".equals(sScoreMode) || "sum".equals(sScoreMode)) {
@@ -149,7 +151,8 @@ public class NestedQueryParser implements QueryParser {
             }
 
             if (innerHits != null) {
-                InnerHitsContext.NestedInnerHits nestedInnerHits = new InnerHitsContext.NestedInnerHits(innerHits.v2(), innerQuery, null, getParentObjectMapper(), nestedObjectMapper);
+                ParsedQuery parsedQuery = new ParsedQuery(innerQuery, parseContext.copyNamedQueries());
+                InnerHitsContext.NestedInnerHits nestedInnerHits = new InnerHitsContext.NestedInnerHits(innerHits.v2(), parsedQuery, null, getParentObjectMapper(), nestedObjectMapper);
                 String name = innerHits.v1() != null ? innerHits.v1() : path;
                 parseContext.addInnerHits(name, nestedInnerHits);
             }

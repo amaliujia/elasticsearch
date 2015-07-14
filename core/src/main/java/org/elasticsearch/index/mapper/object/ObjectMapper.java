@@ -42,7 +42,7 @@ import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.MapperUtils;
 import org.elasticsearch.index.mapper.MergeMappingException;
 import org.elasticsearch.index.mapper.MergeResult;
-import org.elasticsearch.index.mapper.RootMapper;
+import org.elasticsearch.index.mapper.MetadataFieldMapper;
 import org.elasticsearch.index.mapper.internal.AllFieldMapper;
 import org.elasticsearch.index.mapper.internal.TypeFieldMapper;
 import org.elasticsearch.index.settings.IndexSettings;
@@ -66,7 +66,7 @@ import static org.elasticsearch.index.mapper.core.TypeParsers.parsePathType;
 /**
  *
  */
-public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Cloneable {
+public class ObjectMapper extends Mapper implements AllFieldMapper.IncludeInAll, Cloneable {
 
     public static final String CONTENT_TYPE = "object";
     public static final String NESTED_CONTENT_TYPE = "nested";
@@ -175,7 +175,7 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
             Map<String, Mapper> mappers = new HashMap<>();
             for (Mapper.Builder builder : mappersBuilders) {
                 Mapper mapper = builder.build(context);
-                mappers.put(mapper.name(), mapper);
+                mappers.put(mapper.simpleName(), mapper);
             }
             context.path().pathType(origPathType);
             context.path().remove();
@@ -236,7 +236,7 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
         }
 
         protected static boolean parseObjectProperties(String name, String fieldName, Object fieldNode, ParserContext parserContext, ObjectMapper.Builder builder) {
-            if (fieldName.equals("path") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+            if (fieldName.equals("path") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                 builder.pathType(parsePathType(name, fieldNode.toString()));
                 return true;
             }
@@ -278,7 +278,10 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
             Iterator<Map.Entry<String, Object>> iterator = propsNode.entrySet().iterator();
             while (iterator.hasNext()) {
                 Map.Entry<String, Object> entry = iterator.next();
-                String propName = entry.getKey();
+                String fieldName = entry.getKey();
+                if (fieldName.contains(".")) {
+                    throw new MapperParsingException("Field name [" + fieldName + "] cannot contain '.'");
+                }
                 // Should accept empty arrays, as a work around for when the
                 // user can't provide an empty Map. (PHP for example)
                 boolean isEmptyList = entry.getValue() instanceof List && ((List<?>) entry.getValue()).isEmpty();
@@ -301,23 +304,23 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
                             // any type, including core values, which
                             type = ObjectMapper.CONTENT_TYPE;
                         } else {
-                            throw new MapperParsingException("No type specified for property [" + propName + "]");
+                            throw new MapperParsingException("No type specified for field [" + fieldName + "]");
                         }
                     }
 
                     Mapper.TypeParser typeParser = parserContext.typeParser(type);
                     if (typeParser == null) {
-                        throw new MapperParsingException("No handler for type [" + type + "] declared on field [" + propName + "]");
+                        throw new MapperParsingException("No handler for type [" + type + "] declared on field [" + fieldName + "]");
                     }
-                    objBuilder.add(typeParser.parse(propName, propNode, parserContext));
+                    objBuilder.add(typeParser.parse(fieldName, propNode, parserContext));
                     propNode.remove("type");
-                    DocumentMapperParser.checkNoRemainingFields(propName, propNode, parserContext.indexVersionCreated());
+                    DocumentMapperParser.checkNoRemainingFields(fieldName, propNode, parserContext.indexVersionCreated());
                     iterator.remove();
                 } else if (isEmptyList) {
                     iterator.remove();
                 } else {
-                    throw new MapperParsingException("Expected map for property [fields] on field [" + propName + "] but got a "
-                            + propName.getClass());
+                    throw new MapperParsingException("Expected map for property [fields] on field [" + fieldName + "] but got a "
+                            + fieldName.getClass());
                 }
             }
 
@@ -330,8 +333,6 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
             return object(name);
         }
     }
-
-    private final String name;
 
     private final String fullPath;
 
@@ -353,7 +354,7 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
     private volatile CopyOnWriteHashMap<String, Mapper> mappers;
 
     ObjectMapper(String name, String fullPath, boolean enabled, Nested nested, Dynamic dynamic, ContentPath.Type pathType, Map<String, Mapper> mappers) {
-        this.name = name;
+        super(name);
         this.fullPath = fullPath;
         this.enabled = enabled;
         this.nested = nested;
@@ -393,7 +394,7 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
 
     @Override
     public String name() {
-        return this.name;
+        return this.fullPath;
     }
 
     public boolean isEnabled() {
@@ -463,7 +464,7 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
         if (mapper instanceof AllFieldMapper.IncludeInAll) {
             ((AllFieldMapper.IncludeInAll) mapper).includeInAllIfNotSet(includeInAll);
         }
-        mappers = mappers.copyAndPut(mapper.name(), mapper);
+        mappers = mappers.copyAndPut(mapper.simpleName(), mapper);
     }
 
     @Override
@@ -516,14 +517,14 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
         List<FieldMapper> newFieldMappers = new ArrayList<>();
         for (Mapper mapper : mergeWithObject) {
             Mapper mergeWithMapper = mapper;
-            Mapper mergeIntoMapper = mappers.get(mergeWithMapper.name());
+            Mapper mergeIntoMapper = mappers.get(mergeWithMapper.simpleName());
             if (mergeIntoMapper == null) {
                 // no mapping, simply add it if not simulating
                 if (!mergeResult.simulate()) {
                     mappersToPut.add(mergeWithMapper);
                     MapperUtils.collect(mergeWithMapper, newObjectMappers, newFieldMappers);
                 }
-            } else if (mergeIntoMapper instanceof RootMapper == false) {
+            } else if (mergeIntoMapper instanceof MetadataFieldMapper == false) {
                 // root mappers can only exist here for backcompat, and are merged in Mapping
                 mergeIntoMapper.merge(mergeWithMapper, mergeResult);
             }
@@ -545,20 +546,13 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
     }
 
     @Override
-    public void close() {
-        for (Mapper mapper : mappers.values()) {
-            mapper.close();
-        }
-    }
-
-    @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         toXContent(builder, params, null);
         return builder;
     }
 
     public void toXContent(XContentBuilder builder, Params params, ToXContent custom) throws IOException {
-        builder.startObject(name);
+        builder.startObject(simpleName());
         if (nested.isNested()) {
             builder.field("type", NESTED_CONTENT_TYPE);
             if (nested.isIncludeInParent()) {
@@ -600,7 +594,7 @@ public class ObjectMapper implements Mapper, AllFieldMapper.IncludeInAll, Clonea
 
         int count = 0;
         for (Mapper mapper : sortedMappers) {
-            if (!(mapper instanceof RootMapper)) {
+            if (!(mapper instanceof MetadataFieldMapper)) {
                 if (count++ == 0) {
                     builder.startObject("properties");
                 }

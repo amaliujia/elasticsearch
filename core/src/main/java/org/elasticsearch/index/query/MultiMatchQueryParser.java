@@ -84,7 +84,7 @@ public class MultiMatchQueryParser implements QueryParser {
                 if ("query".equals(currentFieldName)) {
                     value = parser.objectText();
                 } else if ("type".equals(currentFieldName)) {
-                    type = MultiMatchQueryBuilder.Type.parse(parser.text(), parseContext.parseFlags());
+                    type = MultiMatchQueryBuilder.Type.parse(parser.text(), parseContext.parseFieldMatcher());
                 } else if ("analyzer".equals(currentFieldName)) {
                     String analyzer = parser.text();
                     if (parseContext.analysisService().analyzer(analyzer) == null) {
@@ -95,7 +95,7 @@ public class MultiMatchQueryParser implements QueryParser {
                     boost = parser.floatValue();
                 } else if ("slop".equals(currentFieldName) || "phrase_slop".equals(currentFieldName) || "phraseSlop".equals(currentFieldName)) {
                     multiMatchQuery.setPhraseSlop(parser.intValue());
-                } else if (Fuzziness.FIELD.match(currentFieldName, parseContext.parseFlags())) {
+                } else if (parseContext.parseFieldMatcher().match(currentFieldName, Fuzziness.FIELD)) {
                     multiMatchQuery.setFuzziness(Fuzziness.parse(parser));
                 } else if ("prefix_length".equals(currentFieldName) || "prefixLength".equals(currentFieldName)) {
                     multiMatchQuery.setFuzzyPrefixLength(parser.intValue());
@@ -113,10 +113,8 @@ public class MultiMatchQueryParser implements QueryParser {
                     }
                 } else if ("minimum_should_match".equals(currentFieldName) || "minimumShouldMatch".equals(currentFieldName)) {
                     minimumShouldMatch = parser.textOrNull();
-                } else if ("rewrite".equals(currentFieldName)) {
-                    multiMatchQuery.setRewriteMethod(QueryParsers.parseRewriteMethod(parser.textOrNull(), null));
                 } else if ("fuzzy_rewrite".equals(currentFieldName) || "fuzzyRewrite".equals(currentFieldName)) {
-                    multiMatchQuery.setFuzzyRewriteMethod(QueryParsers.parseRewriteMethod(parser.textOrNull(), null));
+                    multiMatchQuery.setFuzzyRewriteMethod(QueryParsers.parseRewriteMethod(parseContext.parseFieldMatcher(), parser.textOrNull(), null));
                 } else if ("use_dis_max".equals(currentFieldName) || "useDisMax".equals(currentFieldName)) {
                     useDisMax = parser.booleanValue();
                 } else if ("tie_breaker".equals(currentFieldName) || "tieBreaker".equals(currentFieldName)) {

@@ -41,8 +41,6 @@ import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.index.fieldvisitor.AllFieldsVisitor;
 import org.elasticsearch.index.fieldvisitor.CustomFieldsVisitor;
 import org.elasticsearch.index.fieldvisitor.FieldsVisitor;
-import org.elasticsearch.index.fieldvisitor.JustUidFieldsVisitor;
-import org.elasticsearch.index.fieldvisitor.UidAndSourceFieldsVisitor;
 import org.elasticsearch.index.mapper.DocumentMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.internal.SourceFieldMapper;
@@ -120,13 +118,9 @@ public class FetchPhase implements SearchPhase {
             if (!context.hasScriptFields() && !context.hasFetchSourceContext()) {
                 context.fetchSourceContext(new FetchSourceContext(true));
             }
-            fieldsVisitor = context.sourceRequested() ? new UidAndSourceFieldsVisitor() : new JustUidFieldsVisitor();
+            fieldsVisitor = new FieldsVisitor(context.sourceRequested());
         } else if (context.fieldNames().isEmpty()) {
-            if (context.sourceRequested()) {
-                fieldsVisitor = new UidAndSourceFieldsVisitor();
-            } else {
-                fieldsVisitor = new JustUidFieldsVisitor();
-            }
+            fieldsVisitor = new FieldsVisitor(context.sourceRequested());
         } else {
             for (String fieldName : context.fieldNames()) {
                 if (fieldName.equals("*")) {
@@ -164,10 +158,8 @@ public class FetchPhase implements SearchPhase {
             } else if (fieldNames != null) {
                 boolean loadSource = extractFieldNames != null || context.sourceRequested();
                 fieldsVisitor = new CustomFieldsVisitor(fieldNames, loadSource);
-            } else if (extractFieldNames != null || context.sourceRequested()) {
-                fieldsVisitor = new UidAndSourceFieldsVisitor();
             } else {
-                fieldsVisitor = new JustUidFieldsVisitor();
+                fieldsVisitor = new FieldsVisitor(extractFieldNames != null || context.sourceRequested());
             }
         }
 
@@ -271,15 +263,10 @@ public class FetchPhase implements SearchPhase {
     }
 
     private InternalSearchHit createNestedSearchHit(SearchContext context, int nestedTopDocId, int nestedSubDocId, int rootSubDocId, List<String> extractFieldNames, boolean loadAllStored, Set<String> fieldNames, LeafReaderContext subReaderContext) throws IOException {
-        final FieldsVisitor rootFieldsVisitor;
-        if (context.sourceRequested() || extractFieldNames != null || context.highlight() != null) {
-            // Also if highlighting is requested on nested documents we need to fetch the _source from the root document,
-            // otherwise highlighting will attempt to fetch the _source from the nested doc, which will fail,
-            // because the entire _source is only stored with the root document.
-            rootFieldsVisitor = new UidAndSourceFieldsVisitor();
-        } else {
-            rootFieldsVisitor = new JustUidFieldsVisitor();
-        }
+        // Also if highlighting is requested on nested documents we need to fetch the _source from the root document,
+        // otherwise highlighting will attempt to fetch the _source from the nested doc, which will fail,
+        // because the entire _source is only stored with the root document.
+        final FieldsVisitor rootFieldsVisitor = new FieldsVisitor(context.sourceRequested() || extractFieldNames != null || context.highlight() != null);
         loadStoredFields(context, subReaderContext, rootFieldsVisitor, rootSubDocId);
         rootFieldsVisitor.postProcess(context.mapperService());
 
@@ -375,16 +362,12 @@ public class FetchPhase implements SearchPhase {
     private InternalSearchHit.InternalNestedIdentity getInternalNestedIdentity(SearchContext context, int nestedSubDocId, LeafReaderContext subReaderContext, DocumentMapper documentMapper, ObjectMapper nestedObjectMapper) throws IOException {
         int currentParent = nestedSubDocId;
         ObjectMapper nestedParentObjectMapper;
-        StringBuilder field = new StringBuilder();
         ObjectMapper current = nestedObjectMapper;
+        String originalName = nestedObjectMapper.name();
         InternalSearchHit.InternalNestedIdentity nestedIdentity = null;
         do {
             Filter parentFilter;
             nestedParentObjectMapper = documentMapper.findParentObjectMapper(current);
-            if (field.length() != 0) {
-                field.insert(0, '.');
-            }
-            field.insert(0, current.name());
             if (nestedParentObjectMapper != null) {
                 if (nestedParentObjectMapper.nested().isNested() == false) {
                     current = nestedParentObjectMapper;
@@ -422,8 +405,11 @@ public class FetchPhase implements SearchPhase {
             }
             currentParent = nextParent;
             current = nestedObjectMapper = nestedParentObjectMapper;
-            nestedIdentity = new InternalSearchHit.InternalNestedIdentity(field.toString(), offset, nestedIdentity);
-            field = new StringBuilder();
+            int currentPrefix = current == null ? 0 : current.name().length() + 1;
+            nestedIdentity = new InternalSearchHit.InternalNestedIdentity(originalName.substring(currentPrefix), offset, nestedIdentity);
+            if (current != null) {
+                originalName = current.name();
+            }
         } while (current != null);
         return nestedIdentity;
     }

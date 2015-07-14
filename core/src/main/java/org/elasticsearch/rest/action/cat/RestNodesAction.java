@@ -35,8 +35,8 @@ import org.elasticsearch.common.Table;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
-import org.elasticsearch.index.cache.filter.FilterCacheStats;
 import org.elasticsearch.index.cache.query.QueryCacheStats;
+import org.elasticsearch.index.cache.request.RequestCacheStats;
 import org.elasticsearch.index.engine.SegmentsStats;
 import org.elasticsearch.index.fielddata.FieldDataStats;
 import org.elasticsearch.index.flush.FlushStats;
@@ -48,12 +48,10 @@ import org.elasticsearch.index.refresh.RefreshStats;
 import org.elasticsearch.index.search.stats.SearchStats;
 import org.elasticsearch.index.suggest.stats.SuggestStats;
 import org.elasticsearch.indices.NodeIndicesStats;
-import org.elasticsearch.monitor.fs.FsStats;
+import org.elasticsearch.monitor.fs.FsInfo;
 import org.elasticsearch.monitor.jvm.JvmInfo;
 import org.elasticsearch.monitor.jvm.JvmStats;
-import org.elasticsearch.monitor.os.OsInfo;
 import org.elasticsearch.monitor.os.OsStats;
-import org.elasticsearch.monitor.process.ProcessInfo;
 import org.elasticsearch.monitor.process.ProcessStats;
 import org.elasticsearch.rest.*;
 import org.elasticsearch.rest.action.support.RestActionListener;
@@ -142,13 +140,13 @@ public class RestNodesAction extends AbstractCatAction {
         table.addCell("fielddata.memory_size", "alias:fm,fielddataMemory;default:false;text-align:right;desc:used fielddata cache");
         table.addCell("fielddata.evictions", "alias:fe,fielddataEvictions;default:false;text-align:right;desc:fielddata evictions");
 
-        table.addCell("filter_cache.memory_size", "alias:fcm,filterCacheMemory;default:false;text-align:right;desc:used filter cache");
-        table.addCell("filter_cache.evictions", "alias:fce,filterCacheEvictions;default:false;text-align:right;desc:filter cache evictions");
+        table.addCell("query_cache.memory_size", "alias:fcm,queryCacheMemory;default:false;text-align:right;desc:used query cache");
+        table.addCell("query_cache.evictions", "alias:fce,queryCacheEvictions;default:false;text-align:right;desc:query cache evictions");
 
-        table.addCell("query_cache.memory_size", "alias:qcm,queryCacheMemory;default:false;text-align:right;desc:used query cache");
-        table.addCell("query_cache.evictions", "alias:qce,queryCacheEvictions;default:false;text-align:right;desc:query cache evictions");
-        table.addCell("query_cache.hit_count", "alias:qchc,queryCacheHitCount;default:false;text-align:right;desc:query cache hit counts");
-        table.addCell("query_cache.miss_count", "alias:qcmc,queryCacheMissCount;default:false;text-align:right;desc:query cache miss counts");
+        table.addCell("request_cache.memory_size", "alias:qcm,requestCacheMemory;default:false;text-align:right;desc:used request cache");
+        table.addCell("request_cache.evictions", "alias:qce,requestCacheEvictions;default:false;text-align:right;desc:request cache evictions");
+        table.addCell("request_cache.hit_count", "alias:qchc,requestCacheHitCount;default:false;text-align:right;desc:request cache hit counts");
+        table.addCell("request_cache.miss_count", "alias:qcmc,requestCacheMissCount;default:false;text-align:right;desc:request cache miss counts");
 
         table.addCell("flush.total", "alias:ft,flushTotal;default:false;text-align:right;desc:number of flushes");
         table.addCell("flush.total_time", "alias:ftt,flushTotalTime;default:false;text-align:right;desc:time spent in flush");
@@ -220,11 +218,8 @@ public class RestNodesAction extends AbstractCatAction {
             NodeStats stats = nodesStats.getNodesMap().get(node.id());
 
             JvmInfo jvmInfo = info == null ? null : info.getJvm();
-            OsInfo osInfo = info == null ? null : info.getOs();
-            ProcessInfo processInfo = info == null ? null : info.getProcess();
-
             JvmStats jvmStats = stats == null ? null : stats.getJvm();
-            FsStats fsStats = stats == null ? null : stats.getFs();
+            FsInfo fsInfo = stats == null ? null : stats.getFs();
             OsStats osStats = stats == null ? null : stats.getOs();
             ProcessStats processStats = stats == null ? null : stats.getProcess();
             NodeIndicesStats indicesStats = stats == null ? null : stats.getIndices();
@@ -232,7 +227,7 @@ public class RestNodesAction extends AbstractCatAction {
             table.startRow();
 
             table.addCell(fullId ? node.id() : Strings.substring(node.getId(), 0, 4));
-            table.addCell(info == null ? null : info.getProcess().id());
+            table.addCell(info == null ? null : info.getProcess().getId());
             table.addCell(node.getHostName());
             table.addCell(node.getHostAddress());
             if (node.address() instanceof InetSocketTransportAddress) {
@@ -244,19 +239,18 @@ public class RestNodesAction extends AbstractCatAction {
             table.addCell(node.getVersion().number());
             table.addCell(info == null ? null : info.getBuild().hashShort());
             table.addCell(jvmInfo == null ? null : jvmInfo.version());
-            table.addCell(fsStats == null ? null : fsStats.getTotal().getAvailable());
+            table.addCell(fsInfo == null ? null : fsInfo.getTotal().getAvailable());
             table.addCell(jvmStats == null ? null : jvmStats.getMem().getHeapUsed());
             table.addCell(jvmStats == null ? null : jvmStats.getMem().getHeapUsedPercent());
             table.addCell(jvmInfo == null ? null : jvmInfo.getMem().getHeapMax());
-            table.addCell(osStats == null ? null : osStats.getMem() == null ? null : osStats.getMem().used());
-            table.addCell(osStats == null ? null : osStats.getMem() == null ? null : osStats.getMem().usedPercent());
-            table.addCell(osInfo == null ? null : osInfo.getMem() == null ? null : osInfo.getMem().total()); // sigar fails to load in IntelliJ
+            table.addCell(osStats == null ? null : osStats.getMem() == null ? null : osStats.getMem().getUsed());
+            table.addCell(osStats == null ? null : osStats.getMem() == null ? null : osStats.getMem().getUsedPercent());
+            table.addCell(osStats == null ? null : osStats.getMem() == null ? null : osStats.getMem().getTotal());
             table.addCell(processStats == null ? null : processStats.getOpenFileDescriptors());
-            table.addCell(processStats == null || processInfo == null ? null :
-                          calculatePercentage(processStats.getOpenFileDescriptors(), processInfo.getMaxFileDescriptors()));
-            table.addCell(processInfo == null ? null : processInfo.getMaxFileDescriptors());
+            table.addCell(processStats == null ? null : calculatePercentage(processStats.getOpenFileDescriptors(), processStats.getMaxFileDescriptors()));
+            table.addCell(processStats == null ? null : processStats.getMaxFileDescriptors());
 
-            table.addCell(osStats == null ? null : osStats.getLoadAverage().length < 1 ? null : String.format(Locale.ROOT, "%.2f", osStats.getLoadAverage()[0]));
+            table.addCell(osStats == null ? null : String.format(Locale.ROOT, "%.2f", osStats.getLoadAverage()));
             table.addCell(jvmStats == null ? null : jvmStats.getUptime());
             table.addCell(node.clientNode() ? "c" : node.dataNode() ? "d" : "-");
             table.addCell(masterId == null ? "x" : masterId.equals(node.id()) ? "*" : node.masterNode() ? "m" : "-");
@@ -269,11 +263,11 @@ public class RestNodesAction extends AbstractCatAction {
             table.addCell(fdStats == null ? null : fdStats.getMemorySize());
             table.addCell(fdStats == null ? null : fdStats.getEvictions());
 
-            FilterCacheStats fcStats = indicesStats == null ? null : indicesStats.getFilterCache();
+            QueryCacheStats fcStats = indicesStats == null ? null : indicesStats.getQueryCache();
             table.addCell(fcStats == null ? null : fcStats.getMemorySize());
             table.addCell(fcStats == null ? null : fcStats.getEvictions());
 
-            QueryCacheStats qcStats = indicesStats == null ? null : indicesStats.getQueryCache();
+            RequestCacheStats qcStats = indicesStats == null ? null : indicesStats.getRequestCache();
             table.addCell(qcStats == null ? null : qcStats.getMemorySize());
             table.addCell(qcStats == null ? null : qcStats.getEvictions());
             table.addCell(qcStats == null ? null : qcStats.getHitCount());

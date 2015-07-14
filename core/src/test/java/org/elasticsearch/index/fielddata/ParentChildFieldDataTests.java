@@ -58,10 +58,10 @@ public class ParentChildFieldDataTests extends AbstractFieldDataTests {
     @Before
     public void before() throws Exception {
         mapperService.merge(
-                childType, new CompressedXContent(PutMappingRequest.buildFromSimplifiedDef(childType, "_parent", "type=" + parentType).string()), true
+                childType, new CompressedXContent(PutMappingRequest.buildFromSimplifiedDef(childType, "_parent", "type=" + parentType).string()), true, false
         );
         mapperService.merge(
-                grandChildType, new CompressedXContent(PutMappingRequest.buildFromSimplifiedDef(grandChildType, "_parent", "type=" + childType).string()), true
+                grandChildType, new CompressedXContent(PutMappingRequest.buildFromSimplifiedDef(grandChildType, "_parent", "type=" + childType).string()), true, false
         );
 
         Document d = new Document();
@@ -185,7 +185,7 @@ public class ParentChildFieldDataTests extends AbstractFieldDataTests {
         assertThat(topDocs.scoreDocs[6].doc, equalTo(6));
         assertThat(((BytesRef) ((FieldDoc) topDocs.scoreDocs[6]).fields[0]).utf8ToString(), equalTo("2"));
         assertThat(topDocs.scoreDocs[7].doc, equalTo(7));
-        assertThat(((BytesRef) ((FieldDoc) topDocs.scoreDocs[7]).fields[0]), equalTo(XFieldComparatorSource.MAX_TERM));
+        assertThat(((BytesRef) ((FieldDoc) topDocs.scoreDocs[7]).fields[0]), equalTo(null));
 
         topDocs = searcher.search(new MatchAllDocsQuery(), 10, new Sort(new SortField(ParentFieldMapper.NAME, comparator, true)));
         assertThat(topDocs.totalHits, equalTo(8));

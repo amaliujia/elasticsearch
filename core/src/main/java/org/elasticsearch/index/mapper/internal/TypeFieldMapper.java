@@ -40,29 +40,27 @@ import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.MergeMappingException;
 import org.elasticsearch.index.mapper.MergeResult;
+import org.elasticsearch.index.mapper.MetadataFieldMapper;
 import org.elasticsearch.index.mapper.ParseContext;
-import org.elasticsearch.index.mapper.RootMapper;
 import org.elasticsearch.index.mapper.Uid;
-import org.elasticsearch.index.mapper.core.AbstractFieldMapper;
 import org.elasticsearch.index.query.QueryParseContext;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-import static org.elasticsearch.index.mapper.MapperBuilders.type;
 import static org.elasticsearch.index.mapper.core.TypeParsers.parseField;
 
 /**
  *
  */
-public class TypeFieldMapper extends AbstractFieldMapper implements RootMapper {
+public class TypeFieldMapper extends MetadataFieldMapper {
 
     public static final String NAME = "_type";
 
     public static final String CONTENT_TYPE = "_type";
 
-    public static class Defaults extends AbstractFieldMapper.Defaults {
+    public static class Defaults {
         public static final String NAME = TypeFieldMapper.NAME;
 
         public static final MappedFieldType FIELD_TYPE = new TypeFieldType();
@@ -79,27 +77,27 @@ public class TypeFieldMapper extends AbstractFieldMapper implements RootMapper {
         }
     }
 
-    public static class Builder extends AbstractFieldMapper.Builder<Builder, TypeFieldMapper> {
+    public static class Builder extends MetadataFieldMapper.Builder<Builder, TypeFieldMapper> {
 
-        public Builder() {
-            super(Defaults.NAME, Defaults.FIELD_TYPE);
+        public Builder(MappedFieldType existing) {
+            super(Defaults.NAME, existing == null ? Defaults.FIELD_TYPE : existing);
             indexName = Defaults.NAME;
         }
 
         @Override
         public TypeFieldMapper build(BuilderContext context) {
-            fieldType.setNames(new MappedFieldType.Names(name, indexName, indexName, name));
-            return new TypeFieldMapper(fieldType, fieldDataSettings, context.indexSettings());
+            fieldType.setNames(new MappedFieldType.Names(indexName, indexName, name));
+            return new TypeFieldMapper(fieldType, context.indexSettings());
         }
     }
 
     public static class TypeParser implements Mapper.TypeParser {
         @Override
         public Mapper.Builder parse(String name, Map<String, Object> node, ParserContext parserContext) throws MapperParsingException {
-            if (parserContext.indexVersionCreated().onOrAfter(Version.V_2_0_0)) {
+            if (parserContext.indexVersionCreated().onOrAfter(Version.V_2_0_0_beta1)) {
                 throw new MapperParsingException(NAME + " is not configurable");
             }
-            TypeFieldMapper.Builder builder = type();
+            Builder builder = new Builder(parserContext.mapperService().fullName(NAME));
             parseField(builder, builder.name, node, parserContext);
             return builder;
         }
@@ -108,7 +106,7 @@ public class TypeFieldMapper extends AbstractFieldMapper implements RootMapper {
     static final class TypeFieldType extends MappedFieldType {
 
         public TypeFieldType() {
-            super(AbstractFieldMapper.Defaults.FIELD_TYPE);
+            setFieldDataType(new FieldDataType("string"));
         }
 
         protected TypeFieldType(TypeFieldType ref) {
@@ -118,6 +116,11 @@ public class TypeFieldMapper extends AbstractFieldMapper implements RootMapper {
         @Override
         public MappedFieldType clone() {
             return new TypeFieldType(this);
+        }
+
+        @Override
+        public String typeName() {
+            return CONTENT_TYPE;
         }
 
         @Override
@@ -142,24 +145,14 @@ public class TypeFieldMapper extends AbstractFieldMapper implements RootMapper {
         }
     }
 
-    public TypeFieldMapper(Settings indexSettings) {
-        this(Defaults.FIELD_TYPE.clone(), null, indexSettings);
+    public TypeFieldMapper(Settings indexSettings, MappedFieldType existing) {
+        this(existing == null ? Defaults.FIELD_TYPE.clone() : existing.clone(),
+             indexSettings);
     }
 
-    public TypeFieldMapper(MappedFieldType fieldType, @Nullable Settings fieldDataSettings, Settings indexSettings) {
-        super(fieldType, false, fieldDataSettings, indexSettings);
+    public TypeFieldMapper(MappedFieldType fieldType, Settings indexSettings) {
+        super(NAME, fieldType, Defaults.FIELD_TYPE, indexSettings);
     }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return Defaults.FIELD_TYPE;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return new FieldDataType("string");
-    }
-
 
     @Override
     public void preParse(ParseContext context) throws IOException {

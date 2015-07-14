@@ -25,9 +25,9 @@ import org.apache.lucene.search.MultiTermQuery;
 import org.apache.lucene.search.Query;
 import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.lucene.BytesRefs;
 import org.elasticsearch.common.unit.Fuzziness;
 import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.query.support.QueryParsers;
 
@@ -62,12 +62,12 @@ public class FuzzyQueryParser implements QueryParser {
         }
         String fieldName = parser.currentName();
 
-        String value = null;
+        Object value = null;
         float boost = 1.0f;
         Fuzziness fuzziness = DEFAULT_FUZZINESS;
         int prefixLength = FuzzyQuery.defaultPrefixLength;
         int maxExpansions = FuzzyQuery.defaultMaxExpansions;
-        boolean transpositions = false;
+        boolean transpositions = FuzzyQuery.defaultTranspositions;
         String queryName = null;
         MultiTermQuery.RewriteMethod rewriteMethod = null;
         if (parseContext.isFilter()) {
@@ -81,12 +81,12 @@ public class FuzzyQueryParser implements QueryParser {
                     currentFieldName = parser.currentName();
                 } else {
                     if ("term".equals(currentFieldName)) {
-                        value = parser.text();
+                        value = parser.objectBytes();
                     } else if ("value".equals(currentFieldName)) {
-                        value = parser.text();
+                        value = parser.objectBytes();
                     } else if ("boost".equals(currentFieldName)) {
                         boost = parser.floatValue();
-                    } else if (FUZZINESS.match(currentFieldName, parseContext.parseFlags())) {
+                    } else if (parseContext.parseFieldMatcher().match(currentFieldName, FUZZINESS)) {
                         fuzziness = Fuzziness.parse(parser);
                     } else if ("prefix_length".equals(currentFieldName) || "prefixLength".equals(currentFieldName)) {
                         prefixLength = parser.intValue();
@@ -95,7 +95,7 @@ public class FuzzyQueryParser implements QueryParser {
                     } else if ("transpositions".equals(currentFieldName)) {
                       transpositions = parser.booleanValue();
                     } else if ("rewrite".equals(currentFieldName)) {
-                        rewriteMethod = QueryParsers.parseRewriteMethod(parser.textOrNull(), null);
+                        rewriteMethod = QueryParsers.parseRewriteMethod(parseContext.parseFieldMatcher(), parser.textOrNull(), null);
                     } else if ("_name".equals(currentFieldName)) {
                         queryName = parser.text();
                     } else {
@@ -105,7 +105,7 @@ public class FuzzyQueryParser implements QueryParser {
             }
             parser.nextToken();
         } else {
-            value = parser.text();
+            value = parser.objectBytes();
             // move to the next token
             parser.nextToken();
         }
@@ -113,14 +113,15 @@ public class FuzzyQueryParser implements QueryParser {
         if (value == null) {
             throw new QueryParsingException(parseContext, "No value specified for fuzzy query");
         }
-
+        
         Query query = null;
         MappedFieldType fieldType = parseContext.fieldMapper(fieldName);
         if (fieldType != null) {
             query = fieldType.fuzzyQuery(value, fuzziness, prefixLength, maxExpansions, transpositions);
         }
         if (query == null) {
-            query = new FuzzyQuery(new Term(fieldName, value), fuzziness.asDistance(value), prefixLength, maxExpansions, transpositions);
+            int maxEdits = fuzziness.asDistance(BytesRefs.toString(value));
+            query = new FuzzyQuery(new Term(fieldName, BytesRefs.toBytesRef(value)), maxEdits, prefixLength, maxExpansions, transpositions);
         }
         if (query instanceof MultiTermQuery) {
             QueryParsers.setRewriteMethod((MultiTermQuery) query, rewriteMethod);

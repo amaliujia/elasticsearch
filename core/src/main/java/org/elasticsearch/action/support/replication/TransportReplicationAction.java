@@ -39,11 +39,12 @@ import org.elasticsearch.cluster.action.shard.ShardStateAction;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.routing.*;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.collect.Tuple;
-import org.elasticsearch.common.compress.CompressedXContent;
+import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.settings.Settings;
@@ -92,8 +93,9 @@ public abstract class TransportReplicationAction<Request extends ReplicationRequ
                                          ClusterService clusterService, IndicesService indicesService,
                                          ThreadPool threadPool, ShardStateAction shardStateAction,
                                          MappingUpdatedAction mappingUpdatedAction, ActionFilters actionFilters,
-                                         Class<Request> request, Class<ReplicaRequest> replicaRequest, String executor) {
-        super(settings, actionName, threadPool, actionFilters);
+                                         IndexNameExpressionResolver indexNameExpressionResolver, Class<Request> request,
+                                         Class<ReplicaRequest> replicaRequest, String executor) {
+        super(settings, actionName, threadPool, actionFilters, indexNameExpressionResolver);
         this.transportService = transportService;
         this.clusterService = clusterService;
         this.indicesService = indicesService;
@@ -240,14 +242,14 @@ public abstract class TransportReplicationAction<Request extends ReplicationRequ
         }
     }
 
-    protected static class RetryOnReplicaException extends IndexShardException {
+    public static class RetryOnReplicaException extends IndexShardException {
 
         public RetryOnReplicaException(ShardId shardId, String msg) {
             super(shardId, msg);
         }
 
-        public RetryOnReplicaException(ShardId shardId, String msg, Throwable cause) {
-            super(shardId, msg, cause);
+        public RetryOnReplicaException(StreamInput in) throws IOException{
+            super(in);
         }
     }
 
@@ -323,14 +325,13 @@ public abstract class TransportReplicationAction<Request extends ReplicationRequ
         }
     }
 
-    protected static class RetryOnPrimaryException extends IndexShardException {
-
+    public static class RetryOnPrimaryException extends IndexShardException {
         public RetryOnPrimaryException(ShardId shardId, String msg) {
             super(shardId, msg);
         }
 
-        public RetryOnPrimaryException(ShardId shardId, String msg, Throwable cause) {
-            super(shardId, msg, cause);
+        public RetryOnPrimaryException(StreamInput in) throws IOException{
+            super(in);
         }
     }
 
@@ -399,7 +400,7 @@ public abstract class TransportReplicationAction<Request extends ReplicationRequ
                 return false;
             }
             if (resolveIndex()) {
-                internalRequest.concreteIndex(observer.observedState().metaData().concreteSingleIndex(internalRequest.request().index(), internalRequest.request().indicesOptions()));
+                internalRequest.concreteIndex(indexNameExpressionResolver.concreteSingleIndex(observer.observedState(), internalRequest.request()));
             } else {
                 internalRequest.concreteIndex(internalRequest.request().index());
             }
@@ -896,7 +897,7 @@ public abstract class TransportReplicationAction<Request extends ReplicationRequ
                                 logger.trace("[{}] transport failure during replica request [{}] ", exp, node, replicaRequest);
                                 if (ignoreReplicaException(exp) == false) {
                                     logger.warn("failed to perform " + actionName + " on remote replica " + node + shardIt.shardId(), exp);
-                                    shardStateAction.shardFailed(shard, indexMetaData.getUUID(),
+                                    shardStateAction.shardFailed(shard, indexMetaData.getIndexUUID(),
                                             "Failed to perform [" + actionName + "] on replica, message [" + ExceptionsHelper.detailedMessage(exp) + "]");
                                 }
                             }

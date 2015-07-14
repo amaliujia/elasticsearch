@@ -21,11 +21,11 @@ package org.elasticsearch.search.aggregations.pipeline.movavg.models;
 
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.ParseField;
+import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.search.aggregations.pipeline.movavg.MovAvgParser;
-import org.elasticsearch.search.internal.SearchContext;
 
 import java.io.IOException;
 import java.text.ParseException;
@@ -39,20 +39,48 @@ public class HoltLinearModel extends MovAvgModel {
     protected static final ParseField NAME_FIELD = new ParseField("holt");
 
     /**
-     * Controls smoothing of data. Alpha = 1 retains no memory of past values
+     * Controls smoothing of data.  Also known as "level" value.
+     * Alpha = 1 retains no memory of past values
      * (e.g. random walk), while alpha = 0 retains infinite memory of past values (e.g.
-     * mean of the series).  Useful values are somewhere in between
+     * mean of the series).
      */
-    private double alpha;
+    private final double alpha;
 
     /**
-     * Equivalent to <code>alpha</code>, but controls the smoothing of the trend instead of the data
+     * Controls smoothing of trend.
+     * Beta = 1 retains no memory of past values
+     * (e.g. random walk), while alpha = 0 retains infinite memory of past values (e.g.
+     * mean of the series).
      */
-    private double beta;
+    private final double beta;
 
     public HoltLinearModel(double alpha, double beta) {
         this.alpha = alpha;
         this.beta = beta;
+    }
+
+    @Override
+    public boolean canBeMinimized() {
+        return true;
+    }
+
+    @Override
+    public MovAvgModel neighboringModel() {
+        double newValue = Math.random();
+        switch ((int) (Math.random() * 2)) {
+            case 0:
+                return new HoltLinearModel(newValue, this.beta);
+            case 1:
+                return new HoltLinearModel(this.alpha, newValue);
+            default:
+                assert (false): "Random value fell outside of range [0-1]";
+                return new HoltLinearModel(newValue, this.beta);    // This should never technically happen...
+        }
+    }
+
+    @Override
+    public MovAvgModel clone() {
+        return new HoltLinearModel(this.alpha, this.beta);
     }
 
     /**
@@ -67,7 +95,7 @@ public class HoltLinearModel extends MovAvgModel {
      * @return                  Returns an array of doubles, since most smoothing methods operate on floating points
      */
     @Override
-    public <T extends Number> double[] predict(Collection<T> values, int numPredictions) {
+    protected <T extends Number> double[] doPredict(Collection<T> values, int numPredictions) {
         return next(values, numPredictions);
     }
 
@@ -152,18 +180,19 @@ public class HoltLinearModel extends MovAvgModel {
         }
 
         @Override
-        public MovAvgModel parse(@Nullable Map<String, Object> settings, String pipelineName, int windowSize) throws ParseException {
+        public MovAvgModel parse(@Nullable Map<String, Object> settings, String pipelineName, int windowSize, ParseFieldMatcher parseFieldMatcher) throws ParseException {
 
-            double alpha = parseDoubleParam(settings, "alpha", 0.5);
-            double beta = parseDoubleParam(settings, "beta", 0.5);
+            double alpha = parseDoubleParam(settings, "alpha", 0.3);
+            double beta = parseDoubleParam(settings, "beta", 0.1);
             return new HoltLinearModel(alpha, beta);
         }
     }
 
     public static class HoltLinearModelBuilder implements MovAvgModelBuilder {
 
-        private double alpha = 0.5;
-        private double beta = 0.5;
+
+        private Double alpha;
+        private Double beta;
 
         /**
          * Alpha controls the smoothing of the data.  Alpha = 1 retains no memory of past values
@@ -195,8 +224,15 @@ public class HoltLinearModel extends MovAvgModel {
         public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
             builder.field(MovAvgParser.MODEL.getPreferredName(), NAME_FIELD.getPreferredName());
             builder.startObject(MovAvgParser.SETTINGS.getPreferredName());
+
+            if (alpha != null) {
                 builder.field("alpha", alpha);
+            }
+
+            if (beta != null) {
                 builder.field("beta", beta);
+            }
+
             builder.endObject();
             return builder;
         }

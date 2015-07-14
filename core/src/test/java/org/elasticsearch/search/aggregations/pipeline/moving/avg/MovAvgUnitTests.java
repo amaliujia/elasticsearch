@@ -20,17 +20,15 @@
 package org.elasticsearch.search.aggregations.pipeline.moving.avg;
 
 import com.google.common.collect.EvictingQueue;
-
-import org.elasticsearch.search.SearchParseException;
+import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.search.aggregations.pipeline.movavg.models.*;
 import org.elasticsearch.test.ElasticsearchTestCase;
-
-import static org.hamcrest.Matchers.equalTo;
-
 import org.junit.Test;
 
 import java.text.ParseException;
 import java.util.*;
+
+import static org.hamcrest.Matchers.equalTo;
 
 public class MovAvgUnitTests extends ElasticsearchTestCase {
 
@@ -47,7 +45,10 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
             double randValue = randomDouble();
             double expected = 0;
 
-            window.offer(randValue);
+            if (i == 0) {
+                window.offer(randValue);
+                continue;
+            }
 
             for (double value : window) {
                 expected += value;
@@ -56,6 +57,7 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
 
             double actual = model.next(window);
             assertThat(Double.compare(expected, actual), equalTo(0));
+            window.offer(randValue);
         }
     }
 
@@ -64,7 +66,7 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         MovAvgModel model = new SimpleModel();
 
         int windowSize = randomIntBetween(1, 50);
-        int numPredictions = randomIntBetween(1,50);
+        int numPredictions = randomIntBetween(1, 50);
 
         EvictingQueue<Double> window = EvictingQueue.create(windowSize);
         for (int i = 0; i < windowSize; i++) {
@@ -73,13 +75,12 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         double actual[] = model.predict(window, numPredictions);
 
         double expected[] = new double[numPredictions];
-        for (int i = 0; i < numPredictions; i++) {
-            for (double value : window) {
-                expected[i] += value;
-            }
-            expected[i] /= window.size();
-            window.offer(expected[i]);
+        double t = 0;
+        for (double value : window) {
+            t += value;
         }
+        t /= window.size();
+        Arrays.fill(expected, t);
 
         for (int i = 0; i < numPredictions; i++) {
             assertThat(Double.compare(expected[i], actual[i]), equalTo(0));
@@ -96,7 +97,11 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         EvictingQueue<Double> window = EvictingQueue.create(windowSize);
         for (int i = 0; i < numValues; i++) {
             double randValue = randomDouble();
-            window.offer(randValue);
+
+            if (i == 0) {
+                window.offer(randValue);
+                continue;
+            }
 
             double avg = 0;
             long totalWeight = 1;
@@ -110,6 +115,7 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
             double expected = avg / totalWeight;
             double actual = model.next(window);
             assertThat(Double.compare(expected, actual), equalTo(0));
+            window.offer(randValue);
         }
     }
 
@@ -127,19 +133,17 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         double actual[] = model.predict(window, numPredictions);
         double expected[] = new double[numPredictions];
 
-        for (int i = 0; i < numPredictions; i++) {
-            double avg = 0;
-            long totalWeight = 1;
-            long current = 1;
+        double avg = 0;
+        long totalWeight = 1;
+        long current = 1;
 
-            for (double value : window) {
-                avg += value * current;
-                totalWeight += current;
-                current += 1;
-            }
-            expected[i] = avg / totalWeight;
-            window.offer(expected[i]);
+        for (double value : window) {
+            avg += value * current;
+            totalWeight += current;
+            current += 1;
         }
+        avg = avg / totalWeight;
+        Arrays.fill(expected, avg);
 
         for (int i = 0; i < numPredictions; i++) {
             assertThat(Double.compare(expected[i], actual[i]), equalTo(0));
@@ -157,7 +161,11 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         EvictingQueue<Double> window = EvictingQueue.create(windowSize);
         for (int i = 0; i < numValues; i++) {
             double randValue = randomDouble();
-            window.offer(randValue);
+
+            if (i == 0) {
+                window.offer(randValue);
+                continue;
+            }
 
             double avg = 0;
             boolean first = true;
@@ -173,6 +181,7 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
             double expected = avg;
             double actual = model.next(window);
             assertThat(Double.compare(expected, actual), equalTo(0));
+            window.offer(randValue);
         }
     }
 
@@ -191,21 +200,18 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         double actual[] = model.predict(window, numPredictions);
         double expected[] = new double[numPredictions];
 
-        for (int i = 0; i < numPredictions; i++) {
-            double avg = 0;
-            boolean first = true;
+        double avg = 0;
+        boolean first = true;
 
-            for (double value : window) {
-                if (first) {
-                    avg = value;
-                    first = false;
-                } else {
-                    avg = (value * alpha) + (avg * (1 - alpha));
-                }
+        for (double value : window) {
+            if (first) {
+                avg = value;
+                first = false;
+            } else {
+                avg = (value * alpha) + (avg * (1 - alpha));
             }
-            expected[i] = avg;
-            window.offer(expected[i]);
         }
+        Arrays.fill(expected, avg);
 
         for (int i = 0; i < numPredictions; i++) {
             assertThat(Double.compare(expected[i], actual[i]), equalTo(0));
@@ -224,7 +230,11 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         EvictingQueue<Double> window = EvictingQueue.create(windowSize);
         for (int i = 0; i < numValues; i++) {
             double randValue = randomDouble();
-            window.offer(randValue);
+
+            if (i == 0) {
+                window.offer(randValue);
+                continue;
+            }
 
             double s = 0;
             double last_s = 0;
@@ -253,6 +263,7 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
             double expected = s + (0 * b) ;
             double actual = model.next(window);
             assertThat(Double.compare(expected, actual), equalTo(0));
+            window.offer(randValue);
         }
     }
 
@@ -340,12 +351,11 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         // Calculate the slopes between first and second season for each period
         for (int i = 0; i < period; i++) {
             s += vs[i];
-            b += (vs[i] - vs[i + period]) / 2;
+            b += (vs[i + period] - vs[i]) / period;
         }
         s /= (double) period;
         b /= (double) period;
         last_s = s;
-        last_b = b;
 
         // Calculate first seasonal
         if (Double.compare(s, 0.0) == 0 || Double.compare(s, -0.0) == 0) {
@@ -360,14 +370,13 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
             s = alpha * (vs[i] / seasonal[i - period]) + (1.0d - alpha) * (last_s + last_b);
             b = beta * (s - last_s) + (1 - beta) * last_b;
 
-            //seasonal[i] = gamma * (vs[i] / s) + ((1 - gamma) * seasonal[i - period]);
             seasonal[i] = gamma * (vs[i] / (last_s + last_b )) + (1 - gamma) * seasonal[i - period];
             last_s = s;
             last_b = b;
         }
 
-        int seasonCounter = (windowSize - 1) - period;
-        double expected = s + (0 * b) * seasonal[seasonCounter % windowSize];;
+        int idx = window.size() - period + (0 % period);
+        double expected = (s + (1 * b)) * seasonal[idx];
         double actual = model.next(window);
         assertThat(Double.compare(expected, actual), equalTo(0));
     }
@@ -413,35 +422,35 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
         // Calculate the slopes between first and second season for each period
         for (int i = 0; i < period; i++) {
             s += vs[i];
-            b += (vs[i] - vs[i + period]) / 2;
+            b += (vs[i + period] - vs[i]) / period;
         }
         s /= (double) period;
         b /= (double) period;
         last_s = s;
-        last_b = b;
 
-        for (int i = 0; i < period; i++) {
-            // Calculate first seasonal
-            seasonal[i] = vs[i] / s;
+        // Calculate first seasonal
+        if (Double.compare(s, 0.0) == 0 || Double.compare(s, -0.0) == 0) {
+            Arrays.fill(seasonal, 0.0);
+        } else {
+            for (int i = 0; i < period; i++) {
+                seasonal[i] = vs[i] / s;
+            }
         }
 
         for (int i = period; i < vs.length; i++) {
             s = alpha * (vs[i] / seasonal[i - period]) + (1.0d - alpha) * (last_s + last_b);
             b = beta * (s - last_s) + (1 - beta) * last_b;
 
-            //seasonal[i] = gamma * (vs[i] / s) + ((1 - gamma) * seasonal[i - period]);
             seasonal[i] = gamma * (vs[i] / (last_s + last_b )) + (1 - gamma) * seasonal[i - period];
             last_s = s;
             last_b = b;
         }
 
-        int seasonCounter = (windowSize - 1) - period;
 
-        for (int i = 0; i < numPredictions; i++) {
-
-            expected[i] = s + (i * b) * seasonal[seasonCounter % windowSize];
-            assertThat(Double.compare(expected[i], actual[i]), equalTo(0));
-            seasonCounter += 1;
+        for (int i = 1; i <= numPredictions; i++) {
+            int idx = window.size() - period + ((i - 1) % period);
+            expected[i-1] = (s + (i * b)) * seasonal[idx];
+            assertThat(Double.compare(expected[i-1], actual[i-1]), equalTo(0));
         }
 
     }
@@ -479,35 +488,36 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
             counter += 1;
         }
 
-
         // Initial level value is average of first season
         // Calculate the slopes between first and second season for each period
         for (int i = 0; i < period; i++) {
             s += vs[i];
-            b += (vs[i] - vs[i + period]) / 2;
+            b += (vs[i + period] - vs[i]) / period;
         }
         s /= (double) period;
         b /= (double) period;
         last_s = s;
-        last_b = b;
 
-        for (int i = 0; i < period; i++) {
-            // Calculate first seasonal
-            seasonal[i] = vs[i] / s;
+        // Calculate first seasonal
+        if (Double.compare(s, 0.0) == 0 || Double.compare(s, -0.0) == 0) {
+            Arrays.fill(seasonal, 0.0);
+        } else {
+            for (int i = 0; i < period; i++) {
+                seasonal[i] = vs[i] / s;
+            }
         }
 
         for (int i = period; i < vs.length; i++) {
             s = alpha * (vs[i] - seasonal[i - period]) + (1.0d - alpha) * (last_s + last_b);
             b = beta * (s - last_s) + (1 - beta) * last_b;
 
-            //seasonal[i] = gamma * (vs[i] / s) + ((1 - gamma) * seasonal[i - period]);
-            seasonal[i] = gamma * (vs[i] - (last_s + last_b )) + (1 - gamma) * seasonal[i - period];
+            seasonal[i] = gamma * (vs[i] - (last_s - last_b )) + (1 - gamma) * seasonal[i - period];
             last_s = s;
             last_b = b;
         }
 
-        int seasonCounter = (windowSize - 1) - period;
-        double expected = s + (0 * b) + seasonal[seasonCounter % windowSize];;
+        int idx = window.size() - period + (0 % period);
+        double expected = s + (1 * b) + seasonal[idx];
         double actual = model.next(window);
         assertThat(Double.compare(expected, actual), equalTo(0));
     }
@@ -548,40 +558,38 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
             counter += 1;
         }
 
-
         // Initial level value is average of first season
         // Calculate the slopes between first and second season for each period
         for (int i = 0; i < period; i++) {
             s += vs[i];
-            b += (vs[i] - vs[i + period]) / 2;
+            b += (vs[i + period] - vs[i]) / period;
         }
         s /= (double) period;
         b /= (double) period;
         last_s = s;
-        last_b = b;
 
-        for (int i = 0; i < period; i++) {
-            // Calculate first seasonal
-            seasonal[i] = vs[i] / s;
+        // Calculate first seasonal
+        if (Double.compare(s, 0.0) == 0 || Double.compare(s, -0.0) == 0) {
+            Arrays.fill(seasonal, 0.0);
+        } else {
+            for (int i = 0; i < period; i++) {
+                seasonal[i] = vs[i] / s;
+            }
         }
 
         for (int i = period; i < vs.length; i++) {
             s = alpha * (vs[i] - seasonal[i - period]) + (1.0d - alpha) * (last_s + last_b);
             b = beta * (s - last_s) + (1 - beta) * last_b;
 
-            //seasonal[i] = gamma * (vs[i] / s) + ((1 - gamma) * seasonal[i - period]);
-            seasonal[i] = gamma * (vs[i] - (last_s + last_b )) + (1 - gamma) * seasonal[i - period];
+            seasonal[i] = gamma * (vs[i] - (last_s - last_b )) + (1 - gamma) * seasonal[i - period];
             last_s = s;
             last_b = b;
         }
 
-        int seasonCounter = (windowSize - 1) - period;
-
-        for (int i = 0; i < numPredictions; i++) {
-
-            expected[i] = s + (i * b) + seasonal[seasonCounter % windowSize];
-            assertThat(Double.compare(expected[i], actual[i]), equalTo(0));
-            seasonCounter += 1;
+        for (int i = 1; i <= numPredictions; i++) {
+            int idx = window.size() - period + ((i - 1) % period);
+            expected[i-1] = s + (i * b) + seasonal[idx];
+            assertThat(Double.compare(expected[i-1], actual[i-1]), equalTo(0));
         }
 
     }
@@ -607,7 +615,7 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
                 settings.put("gamma", v);
 
                 try {
-                    parser.parse(settings, "pipeline", 10);
+                    parser.parse(settings, "pipeline", 10, ParseFieldMatcher.STRICT);
                 } catch (ParseException e) {
                     fail(parser.getName() + " parser should not have thrown SearchParseException while parsing [" +
                             v.getClass().getSimpleName() +"]");
@@ -622,7 +630,7 @@ public class MovAvgUnitTests extends ElasticsearchTestCase {
             settings.put("gamma", "abc");
 
             try {
-                parser.parse(settings, "pipeline", 10);
+                parser.parse(settings, "pipeline", 10, ParseFieldMatcher.STRICT);
             } catch (ParseException e) {
                 //all good
                 continue;

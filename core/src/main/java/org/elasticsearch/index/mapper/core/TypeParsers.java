@@ -30,6 +30,7 @@ import org.elasticsearch.common.settings.loader.SettingsLoader;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
 import org.elasticsearch.index.mapper.ContentPath;
 import org.elasticsearch.index.mapper.DocumentMapperParser;
+import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType.Loading;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
@@ -48,7 +49,6 @@ import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeFl
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeIntegerValue;
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeMapValue;
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeStringValue;
-import static org.elasticsearch.index.mapper.FieldMapper.DOC_VALUES_FORMAT;
 
 /**
  *
@@ -61,15 +61,15 @@ public class TypeParsers {
         @Override
         public Mapper.Builder<?, ?> parse(String name, Map<String, Object> node, ParserContext parserContext) throws MapperParsingException {
             ContentPath.Type pathType = null;
-            AbstractFieldMapper.Builder mainFieldBuilder = null;
-            List<AbstractFieldMapper.Builder> fields = null;
+            FieldMapper.Builder mainFieldBuilder = null;
+            List<FieldMapper.Builder> fields = null;
             String firstType = null;
 
             for (Iterator<Map.Entry<String, Object>> iterator = node.entrySet().iterator(); iterator.hasNext();) {
                 Map.Entry<String, Object> entry = iterator.next();
                 String fieldName = Strings.toUnderscoreCase(entry.getKey());
                 Object fieldNode = entry.getValue();
-                if (fieldName.equals("path") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+                if (fieldName.equals("path") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                     pathType = parsePathType(name, fieldNode.toString());
                     iterator.remove();
                 } else if (fieldName.equals("fields")) {
@@ -87,21 +87,21 @@ public class TypeParsers {
                                 firstType = type;
                             }
                         } else {
-                            throw new MapperParsingException("No type specified for property [" + propName + "]");
+                            throw new MapperParsingException("no type specified for property [" + propName + "]");
                         }
 
                         Mapper.TypeParser typeParser = parserContext.typeParser(type);
                         if (typeParser == null) {
-                            throw new MapperParsingException("No handler for type [" + type + "] declared on field [" + fieldName + "]");
+                            throw new MapperParsingException("no handler for type [" + type + "] declared on field [" + fieldName + "]");
                         }
                         if (propName.equals(name)) {
-                            mainFieldBuilder = (AbstractFieldMapper.Builder) typeParser.parse(propName, propNode, parserContext);
+                            mainFieldBuilder = (FieldMapper.Builder) typeParser.parse(propName, propNode, parserContext);
                             fieldsIterator.remove();
                         } else {
                             if (fields == null) {
                                 fields = new ArrayList<>(2);
                             }
-                            fields.add((AbstractFieldMapper.Builder) typeParser.parse(propName, propNode, parserContext));
+                            fields.add((FieldMapper.Builder) typeParser.parse(propName, propNode, parserContext));
                             fieldsIterator.remove();
                         }
                     }
@@ -122,8 +122,8 @@ public class TypeParsers {
                     mainFieldBuilder = new StringFieldMapper.Builder(name).index(false);
                 } else {
                     Mapper.Builder substitute = typeParser.parse(name, Collections.<String, Object>emptyMap(), parserContext);
-                    if (substitute instanceof AbstractFieldMapper.Builder) {
-                        mainFieldBuilder = ((AbstractFieldMapper.Builder) substitute).index(false);
+                    if (substitute instanceof FieldMapper.Builder) {
+                        mainFieldBuilder = ((FieldMapper.Builder) substitute).index(false);
                     } else {
                         // The first multi isn't a core field type
                         mainFieldBuilder =  new StringFieldMapper.Builder(name).index(false);
@@ -181,14 +181,14 @@ public class TypeParsers {
         }
     }
 
-    public static void parseField(AbstractFieldMapper.Builder builder, String name, Map<String, Object> fieldNode, Mapper.TypeParser.ParserContext parserContext) {
-        NamedAnalyzer indexAnalyzer = null;
-        NamedAnalyzer searchAnalyzer = null;
+    public static void parseField(FieldMapper.Builder builder, String name, Map<String, Object> fieldNode, Mapper.TypeParser.ParserContext parserContext) {
+        NamedAnalyzer indexAnalyzer = builder.fieldType().indexAnalyzer();
+        NamedAnalyzer searchAnalyzer = builder.fieldType().searchAnalyzer();
         for (Iterator<Map.Entry<String, Object>> iterator = fieldNode.entrySet().iterator(); iterator.hasNext();) {
             Map.Entry<String, Object> entry = iterator.next();
             final String propName = Strings.toUnderscoreCase(entry.getKey());
             final Object propNode = entry.getValue();
-            if (propName.equals("index_name") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+            if (propName.equals("index_name") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                 builder.indexName(propNode.toString());
                 iterator.remove();
             } else if (propName.equals("store")) {
@@ -252,28 +252,28 @@ public class TypeParsers {
                 builder.indexOptions(nodeIndexOptionValue(propNode));
                 iterator.remove();
             } else if (propName.equals("analyzer") || // for backcompat, reading old indexes, remove for v3.0
-                       propName.equals("index_analyzer") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+                       propName.equals("index_analyzer") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                 
                 NamedAnalyzer analyzer = parserContext.analysisService().analyzer(propNode.toString());
                 if (analyzer == null) {
-                    throw new MapperParsingException("Analyzer [" + propNode.toString() + "] not found for field [" + name + "]");
+                    throw new MapperParsingException("analyzer [" + propNode.toString() + "] not found for field [" + name + "]");
                 }
                 indexAnalyzer = analyzer;
                 iterator.remove();
             } else if (propName.equals("search_analyzer")) {
                 NamedAnalyzer analyzer = parserContext.analysisService().analyzer(propNode.toString());
                 if (analyzer == null) {
-                    throw new MapperParsingException("Analyzer [" + propNode.toString() + "] not found for field [" + name + "]");
+                    throw new MapperParsingException("analyzer [" + propNode.toString() + "] not found for field [" + name + "]");
                 }
                 searchAnalyzer = analyzer;
                 iterator.remove();
             } else if (propName.equals("include_in_all")) {
                 builder.includeInAll(nodeBooleanValue(propNode));
                 iterator.remove();
-            } else if (propName.equals("postings_format") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+            } else if (propName.equals("postings_format") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                 // ignore for old indexes
                 iterator.remove();
-            } else if (propName.equals(DOC_VALUES_FORMAT) && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+            } else if (propName.equals("doc_values_format") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                 // ignore for old indexes
                 iterator.remove();
             } else if (propName.equals("similarity")) {
@@ -300,8 +300,8 @@ public class TypeParsers {
         builder.searchAnalyzer(searchAnalyzer);
     }
 
-    public static boolean parseMultiField(AbstractFieldMapper.Builder builder, String name, Mapper.TypeParser.ParserContext parserContext, String propName, Object propNode) {
-        if (propName.equals("path") && parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+    public static boolean parseMultiField(FieldMapper.Builder builder, String name, Mapper.TypeParser.ParserContext parserContext, String propName, Object propNode) {
+        if (propName.equals("path") && parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
             builder.multiFieldPathType(parsePathType(name, propNode.toString()));
             return true;
         } else if (propName.equals("fields")) {
@@ -313,14 +313,14 @@ public class TypeParsers {
             } else if (propNode instanceof Map) {
                 multiFieldsPropNodes = (Map<String, Object>) propNode;
             } else {
-                throw new MapperParsingException("Expected map for property [fields] on field [" + propNode + "] or " +
+                throw new MapperParsingException("expected map for property [fields] on field [" + propNode + "] or " +
                         "[" + propName + "] but got a " + propNode.getClass());
             }
 
             for (Map.Entry<String, Object> multiFieldEntry : multiFieldsPropNodes.entrySet()) {
                 String multiFieldName = multiFieldEntry.getKey();
                 if (!(multiFieldEntry.getValue() instanceof Map)) {
-                    throw new MapperParsingException("Illegal field [" + multiFieldName + "], only fields can be specified inside fields");
+                    throw new MapperParsingException("illegal field [" + multiFieldName + "], only fields can be specified inside fields");
                 }
                 @SuppressWarnings("unchecked")
                 Map<String, Object> multiFieldNodes = (Map<String, Object>) multiFieldEntry.getValue();
@@ -330,7 +330,7 @@ public class TypeParsers {
                 if (typeNode != null) {
                     type = typeNode.toString();
                 } else {
-                    throw new MapperParsingException("No type specified for property [" + multiFieldName + "]");
+                    throw new MapperParsingException("no type specified for property [" + multiFieldName + "]");
                 }
                 if (type.equals(ObjectMapper.CONTENT_TYPE) || type.equals(ObjectMapper.NESTED_CONTENT_TYPE)) {
                     throw new MapperParsingException("Type [" + type + "] cannot be used in multi field");
@@ -338,7 +338,7 @@ public class TypeParsers {
 
                 Mapper.TypeParser typeParser = parserContext.typeParser(type);
                 if (typeParser == null) {
-                    throw new MapperParsingException("No handler for type [" + type + "] declared on field [" + multiFieldName + "]");
+                    throw new MapperParsingException("no handler for type [" + type + "] declared on field [" + multiFieldName + "]");
                 }
                 builder.addMultiField(typeParser.parse(multiFieldName, multiFieldNodes, parserContext));
                 multiFieldNodes.remove("type");
@@ -360,7 +360,7 @@ public class TypeParsers {
         } else if (INDEX_OPTIONS_DOCS.equalsIgnoreCase(value)) {
             return IndexOptions.DOCS;
         } else {
-            throw new ElasticsearchParseException("Failed to parse index option [" + value + "]");
+            throw new ElasticsearchParseException("failed to parse index option [{}]", value);
         }
     }
 
@@ -368,7 +368,7 @@ public class TypeParsers {
         return Joda.forPattern(node.toString());
     }
 
-    public static void parseTermVector(String fieldName, String termVector, AbstractFieldMapper.Builder builder) throws MapperParsingException {
+    public static void parseTermVector(String fieldName, String termVector, FieldMapper.Builder builder) throws MapperParsingException {
         termVector = Strings.toUnderscoreCase(termVector);
         if ("no".equals(termVector)) {
             builder.storeTermVectors(false);
@@ -389,11 +389,11 @@ public class TypeParsers {
             builder.storeTermVectorOffsets(true);
             builder.storeTermVectorPayloads(true);
         } else {
-            throw new MapperParsingException("Wrong value for termVector [" + termVector + "] for field [" + fieldName + "]");
+            throw new MapperParsingException("wrong value for termVector [" + termVector + "] for field [" + fieldName + "]");
         }
     }
 
-    public static void parseIndex(String fieldName, String index, AbstractFieldMapper.Builder builder) throws MapperParsingException {
+    public static void parseIndex(String fieldName, String index, FieldMapper.Builder builder) throws MapperParsingException {
         index = Strings.toUnderscoreCase(index);
         if ("no".equals(index)) {
             builder.index(false);
@@ -404,7 +404,7 @@ public class TypeParsers {
             builder.index(true);
             builder.tokenized(true);
         } else {
-            throw new MapperParsingException("Wrong value for index [" + index + "] for field [" + fieldName + "]");
+            throw new MapperParsingException("wrong value for index [" + index + "] for field [" + fieldName + "]");
         }
     }
 
@@ -425,13 +425,13 @@ public class TypeParsers {
         } else if ("full".equals(path)) {
             return ContentPath.Type.FULL;
         } else {
-            throw new MapperParsingException("Wrong value for pathType [" + path + "] for object [" + name + "]");
+            throw new MapperParsingException("wrong value for pathType [" + path + "] for object [" + name + "]");
         }
     }
 
     @SuppressWarnings("unchecked")
-    public static void parseCopyFields(Object propNode, AbstractFieldMapper.Builder builder) {
-        AbstractFieldMapper.CopyTo.Builder copyToBuilder = new AbstractFieldMapper.CopyTo.Builder();
+    public static void parseCopyFields(Object propNode, FieldMapper.Builder builder) {
+        FieldMapper.CopyTo.Builder copyToBuilder = new FieldMapper.CopyTo.Builder();
         if (isArray(propNode)) {
             for(Object node : (List<Object>) propNode) {
                 copyToBuilder.add(nodeStringValue(node, null));

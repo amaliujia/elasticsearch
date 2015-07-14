@@ -21,8 +21,6 @@ package org.elasticsearch.index.mapper.core;
 
 import com.carrotsearch.hppc.ObjectArrayList;
 import org.apache.lucene.document.Field;
-import org.apache.lucene.document.FieldType;
-import org.apache.lucene.index.DocValuesType;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.store.ByteArrayDataOutput;
 import org.apache.lucene.util.BytesRef;
@@ -30,16 +28,14 @@ import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.Base64;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.compress.CompressorFactory;
-import org.elasticsearch.common.compress.NotXContentException;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.CollectionUtils;
 import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.index.fielddata.FieldDataType;
+import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
@@ -57,14 +53,14 @@ import static org.elasticsearch.index.mapper.core.TypeParsers.parseField;
 /**
  *
  */
-public class BinaryFieldMapper extends AbstractFieldMapper {
+public class BinaryFieldMapper extends FieldMapper {
 
     public static final String CONTENT_TYPE = "binary";
     private static final ParseField COMPRESS = new ParseField("compress").withAllDeprecated("no replacement, implemented at the codec level");
     private static final ParseField COMPRESS_THRESHOLD = new ParseField("compress_threshold").withAllDeprecated("no replacement");
 
 
-    public static class Defaults extends AbstractFieldMapper.Defaults {
+    public static class Defaults {
         public static final MappedFieldType FIELD_TYPE = new BinaryFieldType();
 
         static {
@@ -73,7 +69,7 @@ public class BinaryFieldMapper extends AbstractFieldMapper {
         }
     }
 
-    public static class Builder extends AbstractFieldMapper.Builder<Builder, BinaryFieldMapper> {
+    public static class Builder extends FieldMapper.Builder<Builder, BinaryFieldMapper> {
 
         public Builder(String name) {
             super(name, Defaults.FIELD_TYPE);
@@ -83,9 +79,9 @@ public class BinaryFieldMapper extends AbstractFieldMapper {
         @Override
         public BinaryFieldMapper build(BuilderContext context) {
             setupFieldType(context);
-            ((BinaryFieldType)fieldType).setTryUncompressing(context.indexCreatedVersion().before(Version.V_2_0_0));
-            return new BinaryFieldMapper(fieldType, docValues,
-                    fieldDataSettings, context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
+            ((BinaryFieldType)fieldType).setTryUncompressing(context.indexCreatedVersion().before(Version.V_2_0_0_beta1));
+            return new BinaryFieldMapper(name, fieldType, defaultFieldType,
+                    context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
         }
     }
 
@@ -97,8 +93,8 @@ public class BinaryFieldMapper extends AbstractFieldMapper {
             for (Iterator<Map.Entry<String, Object>> iterator = node.entrySet().iterator(); iterator.hasNext();) {
                 Map.Entry<String, Object> entry = iterator.next();
                 String fieldName = entry.getKey();
-                if (parserContext.indexVersionCreated().before(Version.V_2_0_0) &&
-                        (COMPRESS.match(fieldName) || COMPRESS_THRESHOLD.match(fieldName))) {
+                if (parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1) &&
+                        (parserContext.parseFieldMatcher().match(fieldName, COMPRESS) || parserContext.parseFieldMatcher().match(fieldName, COMPRESS_THRESHOLD))) {
                     iterator.remove();
                 }
             }
@@ -109,9 +105,7 @@ public class BinaryFieldMapper extends AbstractFieldMapper {
     static final class BinaryFieldType extends MappedFieldType {
         private boolean tryUncompressing = false;
 
-        public BinaryFieldType() {
-            super(AbstractFieldMapper.Defaults.FIELD_TYPE);
-        }
+        public BinaryFieldType() {}
 
         protected BinaryFieldType(BinaryFieldType ref) {
             super(ref);
@@ -133,6 +127,11 @@ public class BinaryFieldMapper extends AbstractFieldMapper {
         @Override
         public int hashCode() {
             return Objects.hash(super.hashCode(), tryUncompressing);
+        }
+
+        @Override
+        public String typeName() {
+            return CONTENT_TYPE;
         }
 
         public boolean tryUncompressing() {
@@ -181,19 +180,9 @@ public class BinaryFieldMapper extends AbstractFieldMapper {
         }
     }
 
-    protected BinaryFieldMapper(MappedFieldType fieldType, Boolean docValues,
-                                @Nullable Settings fieldDataSettings, Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
-        super(fieldType, docValues, fieldDataSettings, indexSettings, multiFields, copyTo);
-    }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return Defaults.FIELD_TYPE;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return new FieldDataType("binary");
+    protected BinaryFieldMapper(String simpleName, MappedFieldType fieldType, MappedFieldType defaultFieldType,
+                                Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
+        super(simpleName, fieldType, defaultFieldType, indexSettings, multiFields, copyTo);
     }
 
     @Override

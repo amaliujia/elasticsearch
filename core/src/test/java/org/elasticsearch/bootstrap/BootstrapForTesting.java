@@ -25,6 +25,7 @@ import org.elasticsearch.bootstrap.ESPolicy;
 import org.elasticsearch.bootstrap.Security;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.PathUtils;
+import org.elasticsearch.common.logging.Loggers;
 
 import java.io.FilePermission;
 import java.nio.file.Path;
@@ -49,7 +50,23 @@ public class BootstrapForTesting {
 
     static {
         // just like bootstrap, initialize natives, then SM
-        Bootstrap.initializeNatives(true, true, true);
+        Bootstrap.initializeNatives(true, true);
+
+        // initialize probes
+        Bootstrap.initializeProbes();
+        
+        // check for jar hell
+        try {
+            JarHell.checkJarHell();
+        } catch (Exception e) {
+            if (Boolean.parseBoolean(System.getProperty("tests.maven"))) {
+                throw new RuntimeException("found jar hell in test classpath", e);
+            } else {
+                Loggers.getLogger(BootstrapForTesting.class)
+                    .warn("Your ide or custom test runner has jar hell issues, " +
+                          "you might want to look into that", e);
+            }
+        }
 
         // make sure java.io.tmpdir exists always (in case code uses it in a static initializer)
         Path javaTmpDir = PathUtils.get(Objects.requireNonNull(System.getProperty("java.io.tmpdir"),
@@ -63,6 +80,7 @@ public class BootstrapForTesting {
         // install security manager if requested
         if (systemPropertyAsBoolean("tests.security.manager", false)) {
             try {
+                Security.setCodebaseProperties();
                 // initialize paths the same exact way as bootstrap.
                 Permissions perms = new Permissions();
                 Path basedir = PathUtils.get(Objects.requireNonNull(System.getProperty("project.basedir"), 
@@ -70,8 +88,6 @@ public class BootstrapForTesting {
                 // target/classes, target/test-classes
                 Security.addPath(perms, basedir.resolve("target").resolve("classes"), "read,readlink");
                 Security.addPath(perms, basedir.resolve("target").resolve("test-classes"), "read,readlink");
-                // lib/sigar
-                Security.addPath(perms, basedir.resolve("lib").resolve("sigar"), "read,readlink");
                 // .m2/repository
                 Path m2repoDir = PathUtils.get(Objects.requireNonNull(System.getProperty("m2.repository"), 
                                                                      "please set ${m2.repository} in pom.xml"));

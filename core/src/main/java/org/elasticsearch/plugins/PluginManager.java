@@ -22,27 +22,34 @@ package org.elasticsearch.plugins;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterators;
+
 import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.*;
+import org.elasticsearch.bootstrap.JarHell;
 import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.cli.Terminal;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.http.client.HttpDownloadHelper;
 import org.elasticsearch.common.io.FileSystemUtils;
+import org.elasticsearch.common.logging.log4j.LogConfigurator;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.node.internal.InternalSettingsPreparer;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 import static org.elasticsearch.common.Strings.hasLength;
 import static org.elasticsearch.common.io.FileSystemUtils.moveFilesWithoutOverwriting;
@@ -66,13 +73,28 @@ public class PluginManager {
     // By default timeout is 0 which means no timeout
     public static final TimeValue DEFAULT_TIMEOUT = TimeValue.timeValueMillis(0);
 
-    private static final ImmutableSet<Object> BLACKLIST = ImmutableSet.builder()
+    private static final ImmutableSet<String> BLACKLIST = ImmutableSet.<String>builder()
             .add("elasticsearch",
                     "elasticsearch.bat",
                     "elasticsearch.in.sh",
                     "plugin",
                     "plugin.bat",
                     "service.bat").build();
+
+    private static final ImmutableSet<String> OFFICIAL_PLUGINS = ImmutableSet.<String>builder()
+            .add(
+                    "elasticsearch-analysis-icu",
+                    "elasticsearch-analysis-kuromoji",
+                    "elasticsearch-analysis-phonetic",
+                    "elasticsearch-analysis-smartcn",
+                    "elasticsearch-analysis-stempel",
+                    "elasticsearch-cloud-aws",
+                    "elasticsearch-cloud-azure",
+                    "elasticsearch-cloud-gce",
+                    "elasticsearch-delete-by-query",
+                    "elasticsearch-lang-javascript",
+                    "elasticsearch-lang-python"
+            ).build();
 
     private final Environment environment;
     private String url;
@@ -126,6 +148,10 @@ public class PluginManager {
                 // ignore
                 log("Failed: " + ExceptionsHelper.detailedMessage(e));
             }
+        } else {
+            if (PluginHandle.isOfficialPlugin(pluginHandle.repo, pluginHandle.user, pluginHandle.version)) {
+                checkForOfficialPlugins(pluginHandle.name);
+            }
         }
 
         if (!downloaded) {
@@ -147,6 +173,41 @@ public class PluginManager {
         if (!downloaded) {
             throw new IOException("failed to download out of all possible locations..., use --verbose to get detailed information");
         }
+
+        // unzip plugin to a temp dir
+        Path tmp = unzipToTemporary(pluginFile);
+
+        // create list of current jars in classpath
+        final List<URL> jars = new ArrayList<>();
+        ClassLoader loader = PluginManager.class.getClassLoader();
+        if (loader instanceof URLClassLoader) {
+            for (URL url : ((URLClassLoader) loader).getURLs()) {
+                jars.add(url);
+            }
+        }
+
+        // add any jars we find in the plugin to the list
+        Files.walkFileTree(tmp, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                if (file.toString().endsWith(".jar")) {
+                    jars.add(file.toUri().toURL());
+                }
+                return FileVisitResult.CONTINUE;
+            }
+        });
+
+        // check combined (current classpath + new jars to-be-added)
+        try {
+            JarHell.checkJarHell(jars.toArray(new URL[0]));
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
+
+        // cleanup
+        IOUtils.rm(tmp);
+
+        // TODO: we have a tmpdir made above, so avoid zipfilesystem
         try (FileSystem zipFile = FileSystems.newFileSystem(pluginFile, null)) {
             for (final Path root : zipFile.getRootDirectories() ) {
                 final Path[] topLevelFiles = FileSystemUtils.files(root);
@@ -216,14 +277,21 @@ public class PluginManager {
                 throw new IOException("Could not move [" + binFile + "] to [" + toLocation + "]", e);
             }
             if (Files.getFileStore(toLocation).supportsFileAttributeView(PosixFileAttributeView.class)) {
-                final Set<PosixFilePermission> perms = new HashSet<>();
-                perms.add(PosixFilePermission.OWNER_EXECUTE);
-                perms.add(PosixFilePermission.GROUP_EXECUTE);
-                perms.add(PosixFilePermission.OTHERS_EXECUTE);
+                // add read and execute permissions to existing perms, so execution will work.
+                // read should generally be set already, but set it anyway: don't rely on umask...
+                final Set<PosixFilePermission> executePerms = new HashSet<>();
+                executePerms.add(PosixFilePermission.OWNER_READ);
+                executePerms.add(PosixFilePermission.GROUP_READ);
+                executePerms.add(PosixFilePermission.OTHERS_READ);
+                executePerms.add(PosixFilePermission.OWNER_EXECUTE);
+                executePerms.add(PosixFilePermission.GROUP_EXECUTE);
+                executePerms.add(PosixFilePermission.OTHERS_EXECUTE);
                 Files.walkFileTree(toLocation, new SimpleFileVisitor<Path>() {
                     @Override
                     public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                         if (attrs.isRegularFile()) {
+                            Set<PosixFilePermission> perms = Files.getPosixFilePermissions(file);
+                            perms.addAll(executePerms);
                             Files.setPosixFilePermissions(file, perms);
                         }
                         return FileVisitResult.CONTINUE;
@@ -258,6 +326,33 @@ public class PluginManager {
                 debug("Installed " + name + " into " + site.toAbsolutePath());
             }
         }
+    }
+
+    private Path unzipToTemporary(Path zip) throws IOException {
+        Path tmp = Files.createTempDirectory(environment.tmpFile(), null);
+
+        try (ZipInputStream zipInput = new ZipInputStream(Files.newInputStream(zip))) {
+            ZipEntry entry;
+            byte[] buffer = new byte[8192];
+            while ((entry = zipInput.getNextEntry()) != null) {
+                Path targetFile = tmp.resolve(entry.getName());
+
+                // be on the safe side: do not rely on that directories are always extracted
+                // before their children (although this makes sense, but is it guaranteed?)
+                Files.createDirectories(targetFile.getParent());
+                if (entry.isDirectory() == false) {
+                    try (OutputStream out = Files.newOutputStream(targetFile)) {
+                        int len;
+                        while((len = zipInput.read(buffer)) >= 0) {
+                            out.write(buffer, 0, len);
+                        }
+                    }
+                }
+                zipInput.closeEntry();
+            }
+        }
+
+        return tmp;
     }
 
     public void removePlugin(String name) throws IOException {
@@ -315,6 +410,15 @@ public class PluginManager {
         }
     }
 
+    protected static void checkForOfficialPlugins(String name) {
+        // We make sure that users can use only new short naming for official plugins only
+        if (!OFFICIAL_PLUGINS.contains(name)) {
+            throw new IllegalArgumentException(name +
+                    " is not an official plugin so you should install it using elasticsearch/" +
+                    name + "/latest naming form.");
+        }
+    }
+
     public Path[] getListInstalledPlugins() throws IOException {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(environment.pluginsFile())) {
             return Iterators.toArray(stream.iterator(), Path.class);
@@ -340,6 +444,7 @@ public class PluginManager {
 
     public static void main(String[] args) {
         Tuple<Settings, Environment> initialSettings = InternalSettingsPreparer.prepareSettings(EMPTY_SETTINGS, true, Terminal.DEFAULT);
+        LogConfigurator.configure(initialSettings.v1());
 
         try {
             Files.createDirectories(initialSettings.v2().pluginsFile());
@@ -527,9 +632,15 @@ public class PluginManager {
         SysOut.println("    -h, --help                        : Prints this help message");
         SysOut.newline();
         SysOut.println(" [*] Plugin name could be:");
-        SysOut.println("     elasticsearch/plugin/version for official elasticsearch plugins (download from download.elasticsearch.org)");
+        SysOut.println("     elasticsearch-plugin-name    for Elasticsearch 2.0 Core plugin (download from download.elastic.co)");
+        SysOut.println("     elasticsearch/plugin/version for elasticsearch commercial plugins (download from download.elastic.co)");
         SysOut.println("     groupId/artifactId/version   for community plugins (download from maven central or oss sonatype)");
         SysOut.println("     username/repository          for site plugins (download from github master)");
+        SysOut.newline();
+        SysOut.println("Elasticsearch Core plugins:");
+        for (String o : OFFICIAL_PLUGINS) {
+            SysOut.println(" - " + o);
+        }
 
         if (message != null) {
             SysOut.newline();
@@ -582,17 +693,26 @@ public class PluginManager {
         List<URL> urls() {
             List<URL> urls = new ArrayList<>();
             if (version != null) {
-                // Elasticsearch download service
-                addUrl(urls, "http://download.elasticsearch.org/" + user + "/" + repo + "/" + repo + "-" + version + ".zip");
-                // Maven central repository
-                addUrl(urls, "http://search.maven.org/remotecontent?filepath=" + user.replace('.', '/') + "/" + repo + "/" + version + "/" + repo + "-" + version + ".zip");
-                // Sonatype repository
-                addUrl(urls, "https://oss.sonatype.org/service/local/repositories/releases/content/" + user.replace('.', '/') + "/" + repo + "/" + version + "/" + repo + "-" + version + ".zip");
-                // Github repository
-                addUrl(urls, "https://github.com/" + user + "/" + repo + "/archive/" + version + ".zip");
+                // Elasticsearch new download service uses groupId org.elasticsearch.plugins from 2.0.0
+                if (user == null) {
+                    // TODO Update to https
+                    addUrl(urls, String.format(Locale.ROOT, "http://download.elastic.co/org.elasticsearch.plugins/%1$s/%1$s-%2$s.zip", repo, version));
+                } else {
+                    // Elasticsearch old download service
+                    // TODO Update to https
+                    addUrl(urls, String.format(Locale.ROOT, "http://download.elastic.co/%1$s/%2$s/%2$s-%3$s.zip", user, repo, version));
+                    // Maven central repository
+                    addUrl(urls, String.format(Locale.ROOT, "http://search.maven.org/remotecontent?filepath=%1$s/%2$s/%3$s/%2$s-%3$s.zip", user.replace('.', '/'), repo, version));
+                    // Sonatype repository
+                    addUrl(urls, String.format(Locale.ROOT, "https://oss.sonatype.org/service/local/repositories/releases/content/%1$s/%2$s/%3$s/%2$s-%3$s.zip", user.replace('.', '/'), repo, version));
+                    // Github repository
+                    addUrl(urls, String.format(Locale.ROOT, "https://github.com/%1$s/%2$s/archive/%3$s.zip", user, repo, version));
+                }
             }
-            // Github repository for master branch (assume site)
-            addUrl(urls, "https://github.com/" + user + "/" + repo + "/archive/master.zip");
+            if (user != null) {
+                // Github repository for master branch (assume site)
+                addUrl(urls, String.format(Locale.ROOT, "https://github.com/%1$s/%2$s/archive/master.zip", user, repo));
+            }
             return urls;
         }
 
@@ -638,19 +758,24 @@ public class PluginManager {
                 }
             }
 
+            String endname = repo;
             if (repo.startsWith("elasticsearch-")) {
                 // remove elasticsearch- prefix
-                String endname = repo.substring("elasticsearch-".length());
-                return new PluginHandle(endname, version, user, repo);
-            }
-
-            if (name.startsWith("es-")) {
+                endname = repo.substring("elasticsearch-".length());
+            } else if (repo.startsWith("es-")) {
                 // remove es- prefix
-                String endname = repo.substring("es-".length());
-                return new PluginHandle(endname, version, user, repo);
+                endname = repo.substring("es-".length());
             }
 
-            return new PluginHandle(repo, version, user, repo);
+            if (isOfficialPlugin(repo, user, version)) {
+                return new PluginHandle(endname, Version.CURRENT.number(), null, repo);
+            }
+
+            return new PluginHandle(endname, version, user, repo);
+        }
+
+        static boolean isOfficialPlugin(String repo, String user, String version) {
+            return version == null && user == null && !Strings.isNullOrEmpty(repo);
         }
     }
 

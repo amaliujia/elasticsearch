@@ -435,18 +435,20 @@ public abstract class ElasticsearchTestCase extends LuceneTestCase {
         return awaitBusy(breakPredicate, 10, TimeUnit.SECONDS);
     }
 
+    // After 1s, we stop growing the sleep interval exponentially and just sleep 1s until maxWaitTime
+    private static final long AWAIT_BUSY_THRESHOLD = 1000L;
+
     public static boolean awaitBusy(Predicate<?> breakPredicate, long maxWaitTime, TimeUnit unit) throws InterruptedException {
         long maxTimeInMillis = TimeUnit.MILLISECONDS.convert(maxWaitTime, unit);
-        long iterations = Math.max(Math.round(Math.log10(maxTimeInMillis) / Math.log10(2)), 1);
         long timeInMillis = 1;
         long sum = 0;
-        for (int i = 0; i < iterations; i++) {
+        while (sum + timeInMillis < maxTimeInMillis) {
             if (breakPredicate.apply(null)) {
                 return true;
             }
-            sum += timeInMillis;
             Thread.sleep(timeInMillis);
-            timeInMillis *= 2;
+            sum += timeInMillis;
+            timeInMillis = Math.min(AWAIT_BUSY_THRESHOLD, timeInMillis * 2);
         }
         timeInMillis = maxTimeInMillis - sum;
         Thread.sleep(Math.max(timeInMillis, 0));
@@ -511,7 +513,7 @@ public abstract class ElasticsearchTestCase extends LuceneTestCase {
     /** Return consistent index settings for the provided index version. */
     public static Settings.Builder settings(Version version) {
         Settings.Builder builder = Settings.builder().put(IndexMetaData.SETTING_VERSION_CREATED, version);
-        if (version.before(Version.V_2_0_0)) {
+        if (version.before(Version.V_2_0_0_beta1)) {
             builder.put(IndexMetaData.SETTING_LEGACY_ROUTING_HASH_FUNCTION, DjbHashFunction.class);
         }
         return builder;
@@ -598,6 +600,15 @@ public abstract class ElasticsearchTestCase extends LuceneTestCase {
         List<T> list = newArrayList(values);
         Collections.shuffle(list);
         return list.subList(0, size);
+    }
+
+    /**
+     * Returns true iff assertions for elasticsearch packages are enabled
+     */
+    public static boolean assertionsEnabled() {
+        boolean enabled = false;
+        assert (enabled = true);
+        return enabled;
     }
 
 }

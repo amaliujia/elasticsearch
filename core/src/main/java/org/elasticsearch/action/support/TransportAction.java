@@ -20,6 +20,8 @@
 package org.elasticsearch.action.support;
 
 import org.elasticsearch.action.*;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
+import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.settings.Settings;
@@ -37,12 +39,17 @@ public abstract class TransportAction<Request extends ActionRequest, Response ex
     protected final ThreadPool threadPool;
     protected final String actionName;
     private final ActionFilter[] filters;
+    protected final ParseFieldMatcher parseFieldMatcher;
+    protected final IndexNameExpressionResolver indexNameExpressionResolver;
 
-    protected TransportAction(Settings settings, String actionName, ThreadPool threadPool, ActionFilters actionFilters) {
+    protected TransportAction(Settings settings, String actionName, ThreadPool threadPool, ActionFilters actionFilters,
+                              IndexNameExpressionResolver indexNameExpressionResolver) {
         super(settings);
+        this.threadPool = threadPool;
         this.actionName = actionName;
         this.filters = actionFilters.filters();
-        this.threadPool = threadPool;
+        this.parseFieldMatcher = new ParseFieldMatcher(settings);
+        this.indexNameExpressionResolver = indexNameExpressionResolver;
     }
 
     public final ActionFuture<Response> execute(Request request) {

@@ -41,8 +41,8 @@ import org.elasticsearch.index.Index;
 import org.elasticsearch.index.settings.IndexSettings;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.store.FsDirectoryService;
-import org.elasticsearch.monitor.fs.FsStats;
-import org.elasticsearch.monitor.fs.JmxFsProbe;
+import org.elasticsearch.monitor.fs.FsInfo;
+import org.elasticsearch.monitor.fs.FsProbe;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -225,38 +225,37 @@ public class NodeEnvironment extends AbstractComponent implements Closeable {
                     spinsDesc = "no";
                 }
 
-                FsStats.Info fsInfo = JmxFsProbe.getFSInfo(nodePath);
+                FsInfo.Path fsPath = FsProbe.getFSInfo(nodePath);
                 sb.append(", free_space [")
-                    .append(fsInfo.getFree())
+                    .append(fsPath.getFree())
                     .append("], usable_space [")
-                    .append(fsInfo.getAvailable())
+                    .append(fsPath.getAvailable())
                     .append("], total_space [")
-                    .append(fsInfo.getTotal())
+                    .append(fsPath.getTotal())
                     .append("], spins? [")
                     .append(spinsDesc)
                     .append("], mount [")
-                    .append(fsInfo.getMount())
+                    .append(fsPath.getMount())
                     .append("], type [")
-                    .append(fsInfo.getType())
+                    .append(fsPath.getType())
                     .append(']');
             }
             logger.debug(sb.toString());
         } else if (logger.isInfoEnabled()) {
-            FsStats.Info totFSInfo = new FsStats.Info();
+            FsInfo.Path totFSPath = new FsInfo.Path();
             Set<String> allTypes = new HashSet<>();
             Set<String> allSpins = new HashSet<>();
             Set<String> allMounts = new HashSet<>();
             for (NodePath nodePath : nodePaths) {
-                // TODO: can/should I use the chosen FsProbe instead (i.e. sigar if it's available)?
-                FsStats.Info fsInfo = JmxFsProbe.getFSInfo(nodePath);
-                String mount = fsInfo.getMount();
+                FsInfo.Path fsPath = FsProbe.getFSInfo(nodePath);
+                String mount = fsPath.getMount();
                 if (allMounts.contains(mount) == false) {
                     allMounts.add(mount);
-                    String type = fsInfo.getType();
+                    String type = fsPath.getType();
                     if (type != null) {
                         allTypes.add(type);
                     }
-                    Boolean spins = fsInfo.getSpins();
+                    Boolean spins = fsPath.getSpins();
                     if (spins == null) {
                         allSpins.add("unknown");
                     } else if (spins.booleanValue()) {
@@ -264,7 +263,7 @@ public class NodeEnvironment extends AbstractComponent implements Closeable {
                     } else {
                         allSpins.add("no");
                     }
-                    totFSInfo.add(fsInfo);
+                    totFSPath.add(fsPath);
                 }
             }
 
@@ -273,8 +272,8 @@ public class NodeEnvironment extends AbstractComponent implements Closeable {
                                       "using [%d] data paths, mounts [%s], net usable_space [%s], net total_space [%s], spins? [%s], types [%s]",
                                       nodePaths.length,
                                       allMounts,
-                                      totFSInfo.getAvailable(),
-                                      totFSInfo.getTotal(),
+                                      totFSPath.getAvailable(),
+                                      totFSPath.getTotal(),
                                       toString(allSpins),
                                       toString(allTypes)));
         }
@@ -312,7 +311,7 @@ public class NodeEnvironment extends AbstractComponent implements Closeable {
      * shard paths. The "write.lock" file is assumed to be under the shard
      * path's "index" directory as used by Elasticsearch.
      *
-     * @throws ElasticsearchException if any of the locks could not be acquired
+     * @throws LockObtainFailedException if any of the locks could not be acquired
      */
     public static void acquireFSLockForPaths(@IndexSettings Settings indexSettings, Path... shardPaths) throws IOException {
         Lock[] locks = new Lock[shardPaths.length];
@@ -327,7 +326,7 @@ public class NodeEnvironment extends AbstractComponent implements Closeable {
                 try {
                     locks[i] = Lucene.acquireWriteLock(dirs[i]);
                 } catch (IOException ex) {
-                    throw new ElasticsearchException("unable to acquire " +
+                    throw new LockObtainFailedException("unable to acquire " +
                             IndexWriter.WRITE_LOCK_NAME + " for " + p);
                 }
             }

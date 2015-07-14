@@ -32,13 +32,13 @@ import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.IndexService;
 import org.elasticsearch.index.engine.Engine;
-import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.shard.IndexShard;
@@ -48,10 +48,7 @@ import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 public class TransportFieldStatsTransportAction extends TransportBroadcastAction<FieldStatsRequest, FieldStatsResponse, FieldStatsShardRequest, FieldStatsShardResponse> {
@@ -59,8 +56,10 @@ public class TransportFieldStatsTransportAction extends TransportBroadcastAction
     private final IndicesService indicesService;
 
     @Inject
-    public TransportFieldStatsTransportAction(Settings settings, ThreadPool threadPool, ClusterService clusterService, TransportService transportService, ActionFilters actionFilters, IndicesService indicesService) {
-        super(settings, FieldStatsAction.NAME, threadPool, clusterService, transportService, actionFilters, FieldStatsRequest.class, FieldStatsShardRequest.class, ThreadPool.Names.MANAGEMENT);
+    public TransportFieldStatsTransportAction(Settings settings, ThreadPool threadPool, ClusterService clusterService,
+                                              TransportService transportService, ActionFilters actionFilters,
+                                              IndexNameExpressionResolver indexNameExpressionResolver, IndicesService indicesService) {
+        super(settings, FieldStatsAction.NAME, threadPool, clusterService, transportService, actionFilters, indexNameExpressionResolver, FieldStatsRequest.class, FieldStatsShardRequest.class, ThreadPool.Names.MANAGEMENT);
         this.indicesService = indicesService;
     }
 
@@ -87,7 +86,7 @@ public class TransportFieldStatsTransportAction extends TransportBroadcastAction
                 } else if ("indices".equals(request.level())) {
                     indexName = shardResponse.getIndex();
                 } else {
-                    // should already have been catched by the FieldStatsRequest#validate(...)
+                    // should already have been caught by the FieldStatsRequest#validate(...)
                     throw new IllegalArgumentException("Illegal level option [" + request.level() + "]");
                 }
 
@@ -105,7 +104,6 @@ public class TransportFieldStatsTransportAction extends TransportBroadcastAction
                                     "trying to merge the field stats of field [" + entry.getKey() + "] from index [" + shardResponse.getIndex() + "] but the field type is incompatible, try to set the 'level' option to 'indices'"
                             );
                         }
-
                         existing.append(entry.getValue());
                     } else {
                         indexMergedFieldStats.put(entry.getKey(), entry.getValue());
@@ -113,6 +111,28 @@ public class TransportFieldStatsTransportAction extends TransportBroadcastAction
                 }
             }
         }
+
+        if (request.getIndexConstraints().length != 0) {
+            Set<String> fieldStatFields = new HashSet<>(Arrays.asList(request.getFields()));
+            for (IndexConstraint indexConstraint : request.getIndexConstraints()) {
+                Iterator<Map.Entry<String, Map<String, FieldStats>>> iterator = indicesMergedFieldStats.entrySet().iterator();
+                while (iterator.hasNext()) {
+                    Map.Entry<String, Map<String, FieldStats>> entry = iterator.next();
+                    FieldStats indexConstraintFieldStats = entry.getValue().get(indexConstraint.getField());
+                    if (indexConstraintFieldStats.match(indexConstraint)) {
+                        // If the field stats didn't occur in the list of fields in the original request we need to remove the
+                        // field stats, because it was never requested and was only needed to validate the index constraint
+                        if (fieldStatFields.contains(indexConstraint.getField()) == false) {
+                            entry.getValue().remove(indexConstraint.getField());
+                        }
+                    } else {
+                        // The index constraint didn't match, so we remove all the field stats of the index we're checking
+                        iterator.remove();
+                    }
+                }
+            }
+        }
+
         return new FieldStatsResponse(shardsResponses.length(), successfulShards, failedShards, shardFailures, indicesMergedFieldStats);
     }
 
@@ -133,7 +153,6 @@ public class TransportFieldStatsTransportAction extends TransportBroadcastAction
         IndexService indexServices = indicesService.indexServiceSafe(shardId.getIndex());
         MapperService mapperService = indexServices.mapperService();
         IndexShard shard = indexServices.shardSafe(shardId.id());
-        shard.readAllowed();
         try (Engine.Searcher searcher = shard.acquireSearcher("fieldstats")) {
             for (String field : request.getFields()) {
                 MappedFieldType fieldType = mapperService.fullName(field);
@@ -155,7 +174,7 @@ public class TransportFieldStatsTransportAction extends TransportBroadcastAction
 
     @Override
     protected GroupShardsIterator shards(ClusterState clusterState, FieldStatsRequest request, String[] concreteIndices) {
-        return clusterService.operationRouting().searchShards(clusterState, request.indices(), concreteIndices, null, null);
+        return clusterService.operationRouting().searchShards(clusterState, concreteIndices, null, null);
     }
 
     @Override

@@ -37,7 +37,6 @@ import org.elasticsearch.common.text.Text;
 import org.elasticsearch.common.unit.DistanceUnit;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
-import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.mapper.Uid;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders;
@@ -1562,10 +1561,8 @@ public class SimpleSortTests extends ElasticsearchIntegrationTest {
     }
 
     public void testSortMetaField() throws Exception {
-        final boolean idDocValues = random().nextBoolean();
-        final boolean timestampDocValues = random().nextBoolean();
         XContentBuilder mapping = XContentFactory.jsonBuilder().startObject().startObject("type")
-                .startObject("_timestamp").field("enabled", true).field("store", true).field("index", !timestampDocValues || randomBoolean() ? "not_analyzed" : "no").field("doc_values", timestampDocValues).endObject()
+                .startObject("_timestamp").field("enabled", true).endObject()
                 .endObject().endObject();
         assertAcked(prepareCreate("test")
             .addMapping("type", mapping));
@@ -2019,10 +2016,9 @@ public class SimpleSortTests extends ElasticsearchIntegrationTest {
                 .addSort(fieldSort("str_field").order(SortOrder.ASC).unmappedType("string"))
                 .addSort(fieldSort("str_field2").order(SortOrder.DESC).unmappedType("string")).get();
 
-        final StringAndBytesText maxTerm = new StringAndBytesText(IndexFieldData.XFieldComparatorSource.MAX_TERM.utf8ToString());
         assertSortValues(resp,
                 new Object[] {new StringAndBytesText("bcd"), null},
-                new Object[] {maxTerm, null});
+                new Object[] {null, null});
 
         resp = client().prepareSearch("test1", "test2")
                 .addSort(fieldSort("long_field").order(SortOrder.ASC).unmappedType("long"))

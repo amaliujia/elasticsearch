@@ -24,7 +24,6 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexableField;
 import org.elasticsearch.Version;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.settings.Settings;
@@ -33,11 +32,8 @@ import org.elasticsearch.index.fielddata.FieldDataType;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
-import org.elasticsearch.index.mapper.MergeMappingException;
-import org.elasticsearch.index.mapper.MergeResult;
+import org.elasticsearch.index.mapper.MetadataFieldMapper;
 import org.elasticsearch.index.mapper.ParseContext;
-import org.elasticsearch.index.mapper.RootMapper;
-import org.elasticsearch.index.mapper.core.AbstractFieldMapper;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -47,7 +43,6 @@ import java.util.Map;
 import java.util.Objects;
 
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeBooleanValue;
-import static org.elasticsearch.index.mapper.MapperBuilders.fieldNames;
 import static org.elasticsearch.index.mapper.core.TypeParsers.parseField;
 
 /**
@@ -56,13 +51,13 @@ import static org.elasticsearch.index.mapper.core.TypeParsers.parseField;
  *
  * Added in Elasticsearch 1.3.
  */
-public class FieldNamesFieldMapper extends AbstractFieldMapper implements RootMapper {
+public class FieldNamesFieldMapper extends MetadataFieldMapper {
 
     public static final String NAME = "_field_names";
 
     public static final String CONTENT_TYPE = "_field_names";
 
-    public static class Defaults extends AbstractFieldMapper.Defaults {
+    public static class Defaults {
         public static final String NAME = FieldNamesFieldMapper.NAME;
         
         public static final boolean ENABLED = true;
@@ -80,11 +75,11 @@ public class FieldNamesFieldMapper extends AbstractFieldMapper implements RootMa
         }
     }
 
-    public static class Builder extends AbstractFieldMapper.Builder<Builder, FieldNamesFieldMapper> {
+    public static class Builder extends MetadataFieldMapper.Builder<Builder, FieldNamesFieldMapper> {
         private boolean enabled = Defaults.ENABLED;
 
-        public Builder() {
-            super(Defaults.NAME, Defaults.FIELD_TYPE);
+        public Builder(MappedFieldType existing) {
+            super(Defaults.NAME, existing == null ? Defaults.FIELD_TYPE : existing);
             indexName = Defaults.NAME;
         }
 
@@ -103,9 +98,10 @@ public class FieldNamesFieldMapper extends AbstractFieldMapper implements RootMa
         @Override
         public FieldNamesFieldMapper build(BuilderContext context) {
             setupFieldType(context);
+            fieldType.setHasDocValues(false);
             FieldNamesFieldType fieldNamesFieldType = (FieldNamesFieldType)fieldType;
             fieldNamesFieldType.setEnabled(enabled);
-            return new FieldNamesFieldMapper(fieldType, fieldDataSettings, context.indexSettings());
+            return new FieldNamesFieldMapper(fieldType, context.indexSettings());
         }
     }
 
@@ -116,8 +112,8 @@ public class FieldNamesFieldMapper extends AbstractFieldMapper implements RootMa
                 throw new IllegalArgumentException("type="+CONTENT_TYPE+" is not supported on indices created before version 1.3.0. Is your cluster running multiple datanode versions?");
             }
             
-            FieldNamesFieldMapper.Builder builder = fieldNames();
-            if (parserContext.indexVersionCreated().before(Version.V_2_0_0)) {
+            Builder builder = new Builder(parserContext.mapperService().fullName(NAME));
+            if (parserContext.indexVersionCreated().before(Version.V_2_0_0_beta1)) {
                 parseField(builder, builder.name, node, parserContext);
             }
 
@@ -139,12 +135,17 @@ public class FieldNamesFieldMapper extends AbstractFieldMapper implements RootMa
         private boolean enabled = Defaults.ENABLED;
 
         public FieldNamesFieldType() {
-            super(AbstractFieldMapper.Defaults.FIELD_TYPE);
+            setFieldDataType(new FieldDataType("string"));
         }
 
         protected FieldNamesFieldType(FieldNamesFieldType ref) {
             super(ref);
             this.enabled = ref.enabled;
+        }
+
+        @Override
+        public FieldNamesFieldType clone() {
+            return new FieldNamesFieldType(this);
         }
 
         @Override
@@ -159,6 +160,21 @@ public class FieldNamesFieldMapper extends AbstractFieldMapper implements RootMa
             return Objects.hash(super.hashCode(), enabled);
         }
 
+        @Override
+        public String typeName() {
+            return CONTENT_TYPE;
+        }
+
+        @Override
+        public void checkCompatibility(MappedFieldType fieldType, List<String> conflicts, boolean strict) {
+            if (strict) {
+                FieldNamesFieldType other = (FieldNamesFieldType)fieldType;
+                if (isEnabled() != other.isEnabled()) {
+                    conflicts.add("mapper [" + names().fullName() + "] is used by multiple types. Set update_all_types to true to update [enabled] across all types.");
+                }
+            }
+        }
+
         public void setEnabled(boolean enabled) {
             checkIfFrozen();
             this.enabled = enabled;
@@ -166,11 +182,6 @@ public class FieldNamesFieldMapper extends AbstractFieldMapper implements RootMa
 
         public boolean isEnabled() {
             return enabled;
-        }
-
-        @Override
-        public FieldNamesFieldType clone() {
-            return new FieldNamesFieldType(this);
         }
 
         @Override
@@ -187,37 +198,26 @@ public class FieldNamesFieldMapper extends AbstractFieldMapper implements RootMa
         }
     }
 
-    private final MappedFieldType defaultFieldType;
     private final boolean pre13Index; // if the index was created before 1.3, _field_names is always disabled
 
-    public FieldNamesFieldMapper(Settings indexSettings) {
-        this(Defaults.FIELD_TYPE.clone(), null, indexSettings);
+    public FieldNamesFieldMapper(Settings indexSettings, MappedFieldType existing) {
+        this(existing == null ? Defaults.FIELD_TYPE.clone() : existing.clone(), indexSettings);
     }
 
-    public FieldNamesFieldMapper(MappedFieldType fieldType, @Nullable Settings fieldDataSettings, Settings indexSettings) {
-        super(fieldType, false, fieldDataSettings, indexSettings);
-        this.defaultFieldType = Defaults.FIELD_TYPE;
+    public FieldNamesFieldMapper(MappedFieldType fieldType, Settings indexSettings) {
+        super(NAME, fieldType, Defaults.FIELD_TYPE, indexSettings);
         this.pre13Index = Version.indexCreated(indexSettings).before(Version.V_1_3_0);
         if (this.pre13Index) {
-            this.fieldType = fieldType().clone();
-            fieldType().setEnabled(false);
-            fieldType().freeze();
+            FieldNamesFieldType newFieldType = fieldType().clone();
+            newFieldType.setEnabled(false);
+            newFieldType.freeze();
+            fieldTypeRef.set(newFieldType);
         }
     }
 
     @Override
     public FieldNamesFieldType fieldType() {
         return (FieldNamesFieldType) super.fieldType();
-    }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return defaultFieldType;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return new FieldDataType("string");
     }
 
     @Override

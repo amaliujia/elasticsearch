@@ -30,6 +30,7 @@ import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.common.inject.Inject;
@@ -57,9 +58,10 @@ public class TransportIndicesStatsAction extends TransportBroadcastAction<Indice
     private final IndicesService indicesService;
 
     @Inject
-    public TransportIndicesStatsAction(Settings settings, ThreadPool threadPool, ClusterService clusterService, TransportService transportService,
-                                       IndicesService indicesService, ActionFilters actionFilters) {
-        super(settings, IndicesStatsAction.NAME, threadPool, clusterService, transportService, actionFilters,
+    public TransportIndicesStatsAction(Settings settings, ThreadPool threadPool, ClusterService clusterService,
+                                       TransportService transportService, IndicesService indicesService,
+                                       ActionFilters actionFilters, IndexNameExpressionResolver indexNameExpressionResolver) {
+        super(settings, IndicesStatsAction.NAME, threadPool, clusterService, transportService, actionFilters, indexNameExpressionResolver,
                 IndicesStatsRequest.class, IndexShardStatsRequest.class, ThreadPool.Names.MANAGEMENT);
         this.indicesService = indicesService;
     }
@@ -157,8 +159,8 @@ public class TransportIndicesStatsAction extends TransportBroadcastAction<Indice
         if (request.request.warmer()) {
             flags.set(CommonStatsFlags.Flag.Warmer);
         }
-        if (request.request.filterCache()) {
-            flags.set(CommonStatsFlags.Flag.FilterCache);
+        if (request.request.queryCache()) {
+            flags.set(CommonStatsFlags.Flag.QueryCache);
         }
         if (request.request.fieldData()) {
             flags.set(CommonStatsFlags.Flag.FieldData);
@@ -180,8 +182,8 @@ public class TransportIndicesStatsAction extends TransportBroadcastAction<Indice
         if (request.request.suggest()) {
             flags.set(CommonStatsFlags.Flag.Suggest);
         }
-        if (request.request.queryCache()) {
-            flags.set(CommonStatsFlags.Flag.QueryCache);
+        if (request.request.requestCache()) {
+            flags.set(CommonStatsFlags.Flag.RequestCache);
         }
         if (request.request.recovery()) {
             flags.set(CommonStatsFlags.Flag.Recovery);

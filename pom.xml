@@ -6,7 +6,7 @@
 
     <groupId>org.elasticsearch</groupId>
     <artifactId>elasticsearch-parent</artifactId>
-    <version>2.0.0-SNAPSHOT</version>
+    <version>2.0.0-beta1-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Elasticsearch Parent POM</name>
     <description>Elasticsearch Parent POM</description>
@@ -33,8 +33,9 @@
     </scm>
 
     <properties>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <!-- elasticsearch stack -->
-        <elasticsearch.version>2.0.0-SNAPSHOT</elasticsearch.version>
+        <elasticsearch.version>${project.version}</elasticsearch.version>
         <jvm.executable>${java.home}${file.separator}bin${file.separator}java</jvm.executable>
         <maven.compiler.source>1.7</maven.compiler.source>
         <maven.compiler.target>1.7</maven.compiler.target>
@@ -93,14 +94,18 @@
         <tests.rest.suite></tests.rest.suite>
         <tests.rest.blacklist></tests.rest.blacklist>
         <tests.rest.spec></tests.rest.spec>
+        <tests.rest.load_packaged></tests.rest.load_packaged>
         <tests.network></tests.network>
         <tests.cluster></tests.cluster>
         <tests.filter></tests.filter>
-        <tests.rest.load_packaged></tests.rest.load_packaged>
         <env.ES_TEST_LOCAL></env.ES_TEST_LOCAL>
         <tests.security.manager>true</tests.security.manager>
         <tests.compatibility></tests.compatibility>
         <tests.ifNoTests>fail</tests.ifNoTests>
+        <skip.unit.tests>${skipTests}</skip.unit.tests>
+        <skip.integ.tests>${skipTests}</skip.integ.tests>
+        <integ.scratch>${project.build.directory}/integ-tests</integ.scratch>
+        <integ.temp>${integ.scratch}/temp</integ.temp>
     </properties>
 
     <repositories>
@@ -125,7 +130,7 @@
         <dependencies>
             <dependency>
                 <groupId>org.elasticsearch</groupId>
-                <artifactId>dev-tools</artifactId>
+                <artifactId>elasticsearch-dev-tools</artifactId>
                 <version>${elasticsearch.version}</version>
             </dependency>
 
@@ -154,9 +159,22 @@
             </dependency>
 
             <dependency>
+                <groupId>com.twitter</groupId>
+                <artifactId>jsr166e</artifactId>
+                <version>1.1.0</version>
+            </dependency>
+
+            <dependency>
                 <groupId>org.apache.lucene</groupId>
                 <artifactId>lucene-test-framework</artifactId>
                 <version>${lucene.maven.version}</version>
+                <!-- we specify our own junit4 version -->
+                <exclusions>
+                    <exclusion>
+                        <groupId>com.carrotsearch.randomizedtesting</groupId>
+                        <artifactId>junit4-ant</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
 
             <dependency>
@@ -170,6 +188,13 @@
                 <artifactId>elasticsearch</artifactId>
                 <version>${elasticsearch.version}</version>
                 <type>test-jar</type>
+            </dependency>
+
+            <dependency>
+                <groupId>org.elasticsearch</groupId>
+                <artifactId>elasticsearch</artifactId>
+                <version>${elasticsearch.version}</version>
+                <type>zip</type>
             </dependency>
 
             <dependency>
@@ -417,24 +442,6 @@
                 <optional>true</optional>
             </dependency>
 
-            <dependency>
-                <groupId>org.fusesource</groupId>
-                <artifactId>sigar</artifactId>
-                <version>1.6.4</version>
-            </dependency>
-
-            <!-- We don't use this since the publish pom is then messed up -->
-            <!--
-            <dependency>
-                <groupId>sigar</groupId>
-                <artifactId>sigar</artifactId>
-                <version>1.6.4</version>
-                <scope>system</scope>
-                <systemPath>${basedir}/lib/sigar/sigar-1.6.4.jar</systemPath>
-                <optional>true</optional>
-            </dependency>
-            -->
-
             <!-- For coverage analysis -->
             <dependency>
                 <groupId>org.jacoco</groupId>
@@ -496,11 +503,6 @@
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-install-plugin</artifactId>
-                    <version>2.5.2</version>
-                </plugin>
-                <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-gpg-plugin</artifactId>
                     <version>1.6</version>
                 </plugin>
@@ -557,6 +559,7 @@
                             <configuration>
                                 <jvm>${jvm.executable}</jvm>
                                 <argLine>${tests.jvm.argline}</argLine>
+                                <skipTests>${skip.unit.tests}</skipTests>
                                 <heartbeat>10</heartbeat>
                                 <jvmOutputAction>warn</jvmOutputAction>
                                 <leaveTemporary>true</leaveTemporary>
@@ -611,7 +614,6 @@
                                     <param>-Xmx${tests.heap.size}</param>
                                     <param>-Xms${tests.heap.size}</param>
                                     <param>${java.permGenSpace}</param>
-                                    <param>-Djava.library.path=${project.basedir}/lib/sigar</param>
                                     <param>-XX:MaxDirectMemorySize=512m</param>
                                     <param>-Des.logger.prefix=</param>
                                     <param>-XX:+HeapDumpOnOutOfMemoryError</param>
@@ -690,6 +692,44 @@
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <version>2.18.1</version>
+                    <configuration>
+                       <skipTests>${skip.integ.tests}</skipTests>
+                       <systemPropertyVariables>
+                           <es.logger.level>${es.logger.level}</es.logger.level>
+                           <tests.rest.suite>${tests.rest.suite}</tests.rest.suite>
+                           <tests.rest.blacklist>${tests.rest.blacklist}</tests.rest.blacklist>
+                           <tests.rest.spec>${tests.rest.spec}</tests.rest.spec>
+                           <tests.rest.load_packaged>${tests.rest.load_packaged}</tests.rest.load_packaged>
+                           <java.io.tmpdir>${integ.temp}</java.io.tmpdir>
+                           <tests.security.manager>false</tests.security.manager>
+                       </systemPropertyVariables>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>integration-test</id>
+                            <goals>
+                                <goal>integration-test</goal>
+                            </goals>
+                        </execution>
+                        <execution>
+                            <id>verify</id>
+                            <goals>
+                                <goal>verify</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <dependencies>
+                      <dependency>
+                        <groupId>org.apache.maven.surefire</groupId>
+                        <artifactId>surefire-junit47</artifactId>
+                        <version>2.18.1</version>
+                      </dependency>
+                    </dependencies>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-source-plugin</artifactId>
                     <version>2.4</version>
                     <executions>
@@ -707,7 +747,8 @@
                     <version>1.5</version>
                     <configuration>
                         <resourceBundles>
-                            <resourceBundle>org.elasticsearch:dev-tools:${elasticsearch.version}</resourceBundle>
+                            <resourceBundle>org.elasticsearch:elasticsearch-dev-tools:${elasticsearch.version}</resourceBundle>
+                            <resourceBundle>org.elasticsearch:elasticsearch-rest-api-spec:${elasticsearch.version}</resourceBundle>
                         </resourceBundles>
                         <outputDirectory>${elasticsearch.tools.directory}</outputDirectory>
                         <!-- don't include dev-tools in artifacts -->
@@ -736,9 +777,6 @@
                                      <internalRuntimeForbidden>true</internalRuntimeForbidden>
                                      <!-- if the used Java version is too new, don't fail, just do nothing: -->
                                      <failOnUnsupportedJava>false</failOnUnsupportedJava>
-                                     <excludes>
-                                         <exclude>jsr166e/**</exclude>
-                                     </excludes>
                                      <bundledSignatures>
                                          <!-- This will automatically choose the right signatures based on 'targetVersion': -->
                                          <bundledSignature>jdk-unsafe</bundledSignature>
@@ -1072,7 +1110,7 @@ org.eclipse.jdt.ui.text.custom_code_templates=<?xml version\="1.0" encoding\="UT
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-pmd-plugin</artifactId>
-                    <version>3.3</version>
+                    <version>3.5</version>
                     <configuration>
                         <rulesets>
                             <ruleset>${elasticsearch.tools.directory}/pmd/custom.xml</ruleset>
@@ -1141,7 +1179,8 @@ org.eclipse.jdt.ui.text.custom_code_templates=<?xml version\="1.0" encoding\="UT
                                         <available file="${basedir}/licenses" type="dir"/>
                                     </condition>
                                     <echo taskName="license check">Running license check</echo>
-                                    <exec failonerror="${licenses.exists}" executable="perl" dir="${elasticsearch.tools.directory}/license-check" >
+                                    <!-- on windows checksums are calculated wrong -->
+                                    <exec failonerror="${licenses.exists}" executable="perl" dir="${elasticsearch.tools.directory}/license-check" osfamily="unix" >
                                         <arg value="check_license_and_sha.pl"/>
                                         <arg value="--check"/>
                                         <arg value="${basedir}"/>
@@ -1228,20 +1267,9 @@ org.eclipse.jdt.ui.text.custom_code_templates=<?xml version\="1.0" encoding\="UT
                             <id>tests-top-hints</id>
                             <phase>test</phase>
                             <configuration>
-                                <skip>${skipTests}</skip>
-                                <!-- don't run if we skip the tests -->
-                                <failOnError>false</failOnError>
+                                <skip>${skip.unit.tests}</skip>
                                 <target>
-                                    <property name="runtime_classpath" refid="maven.runtime.classpath"/>
-                                    <property name="test_classpath" refid="maven.test.classpath"/>
-                                    <property name="plugin_classpath" refid="maven.plugin.classpath"/>
-                                    <taskdef resource="com/carrotsearch/junit4/antlib.xml">
-                                        <classpath>
-                                            <pathelement path="${plugin_classpath}"/>
-                                            <pathelement path="${runtime_classpath}"/>
-                                            <pathelement path="${test_classpath}"/>
-                                        </classpath>
-                                    </taskdef>
+                                    <taskdef resource="com/carrotsearch/junit4/antlib.xml" classpathref="maven.plugin.classpath"/>
                                     <tophints max="${tests.topn}">
                                         <file file="${basedir}/${execution.hint.file}"/>
                                     </tophints>
@@ -1252,12 +1280,19 @@ org.eclipse.jdt.ui.text.custom_code_templates=<?xml version\="1.0" encoding\="UT
                             </goals>
                         </execution>
                     </executions>
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.carrotsearch.randomizedtesting</groupId>
+                            <artifactId>junit4-ant</artifactId>
+                            <version>${testframework.version}</version>
+                        </dependency>
+                    </dependencies>
                 </plugin>
                 <plugin>
                     <!-- We just declare which plugin version to use. Each project can have then its own settings -->
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-invoker-plugin</artifactId>
-                    <version>1.10</version>
+                    <version>2.0.0</version>
                 </plugin>
                 <plugin>
                     <!-- We just declare which plugin version to use. Each project can have then its own settings -->
@@ -1275,6 +1310,14 @@ org.eclipse.jdt.ui.text.custom_code_templates=<?xml version\="1.0" encoding\="UT
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-checkstyle-plugin</artifactId>
                     <version>2.15</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-install-plugin</artifactId>
+                    <version>2.5.2</version>
+                    <configuration>
+                        <createChecksum>true</createChecksum>
+                    </configuration>
                 </plugin>
             </plugins>
         </pluginManagement>
@@ -1314,6 +1357,10 @@ org.eclipse.jdt.ui.text.custom_code_templates=<?xml version\="1.0" encoding\="UT
                     <missing>${basedir}/src</missing>
                 </file>
             </activation>
+            <properties>
+                <skip.unit.tests>true</skip.unit.tests>
+                <skip.integ.tests>true</skip.integ.tests>
+            </properties>
             <build>
                 <plugins>
                     <plugin>
@@ -1456,7 +1503,9 @@ org.eclipse.jdt.ui.text.custom_code_templates=<?xml version\="1.0" encoding\="UT
         </profile>
     </profiles>
     <modules>
+        <module>securemock</module>
         <module>dev-tools</module>
+        <module>rest-api-spec</module>
         <module>plugins</module>
         <module>core</module>
     </modules>

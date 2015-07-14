@@ -20,6 +20,7 @@
 package org.elasticsearch.indices.store;
 
 import com.google.common.base.Predicate;
+import org.apache.lucene.util.LuceneTestCase;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.elasticsearch.action.admin.cluster.state.ClusterStateResponse;
 import org.elasticsearch.cluster.ClusterService;
@@ -77,6 +78,7 @@ public class IndicesStoreIntegrationTests extends ElasticsearchIntegrationTest {
     }
 
     @Test
+    @LuceneTestCase.AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/11989")
     public void indexCleanup() throws Exception {
         final String masterNode = internalCluster().startNode(Settings.builder().put("node.data", false));
         final String node_1 = internalCluster().startNode(Settings.builder().put("node.master", false));
@@ -226,8 +228,8 @@ public class IndicesStoreIntegrationTests extends ElasticsearchIntegrationTest {
         RoutingNode routingNode = stateResponse.getState().routingNodes().node(node_2_id);
         final int[] node2Shards = new int[routingNode.numberOfOwningShards()];
         int i = 0;
-        for (MutableShardRouting mutableShardRouting : routingNode) {
-            node2Shards[i] = mutableShardRouting.shardId().id();
+        for (ShardRouting shardRouting : routingNode) {
+            node2Shards[i] = shardRouting.shardId().id();
             i++;
         }
         logger.info("Node 2 has shards: {}", Arrays.toString(node2Shards));
@@ -249,7 +251,7 @@ public class IndicesStoreIntegrationTests extends ElasticsearchIntegrationTest {
                 for (int i = 0; i < numShards; i++) {
                     indexRoutingTableBuilder.addIndexShard(
                             new IndexShardRoutingTable.Builder(new ShardId("test", i), false)
-                                    .addShard(new ImmutableShardRouting("test", i, node_1_id, true, ShardRoutingState.STARTED, shardVersions[shardIds[i]]))
+                                    .addShard(TestShardRouting.newShardRouting("test", i, node_1_id, true, ShardRoutingState.STARTED, shardVersions[shardIds[i]]))
                                     .build()
                     );
                 }

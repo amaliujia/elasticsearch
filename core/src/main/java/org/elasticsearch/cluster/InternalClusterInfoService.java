@@ -39,7 +39,7 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
-import org.elasticsearch.monitor.fs.FsStats;
+import org.elasticsearch.monitor.fs.FsInfo;
 import org.elasticsearch.node.settings.NodeSettingsService;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.ReceiveTimeoutTransportException;
@@ -320,7 +320,7 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
                             long available = 0;
                             long total = 0;
 
-                            for (FsStats.Info info : nodeStats.getFs()) {
+                            for (FsInfo.Path info : nodeStats.getFs()) {
                                 available += info.getAvailable().bytes();
                                 total += info.getTotal().bytes();
                             }
@@ -360,7 +360,7 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
                     HashMap<String, Long> newShardSizes = new HashMap<>();
                     for (ShardStats s : stats) {
                         long size = s.getStats().getStore().sizeInBytes();
-                        String sid = shardIdentifierFromRouting(s.getShardRouting());
+                        String sid = ClusterInfo.shardIdentifierFromRouting(s.getShardRouting());
                         if (logger.isTraceEnabled()) {
                             logger.trace("shard: {} size: {}", sid, size);
                         }
@@ -411,11 +411,5 @@ public class InternalClusterInfoService extends AbstractComponent implements Clu
         }
     }
 
-    /**
-     * Method that incorporates the ShardId for the shard into a string that
-     * includes a 'p' or 'r' depending on whether the shard is a primary.
-     */
-    public static String shardIdentifierFromRouting(ShardRouting shardRouting) {
-        return shardRouting.shardId().toString() + "[" + (shardRouting.primary() ? "p" : "r") + "]";
-    }
+
 }

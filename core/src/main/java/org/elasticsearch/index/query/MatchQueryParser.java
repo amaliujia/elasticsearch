@@ -105,7 +105,7 @@ public class MatchQueryParser implements QueryParser {
                         boost = parser.floatValue();
                     } else if ("slop".equals(currentFieldName) || "phrase_slop".equals(currentFieldName) || "phraseSlop".equals(currentFieldName)) {
                         matchQuery.setPhraseSlop(parser.intValue());
-                    } else if (Fuzziness.FIELD.match(currentFieldName, parseContext.parseFlags())) {
+                    } else if (parseContext.parseFieldMatcher().match(currentFieldName, Fuzziness.FIELD)) {
                         matchQuery.setFuzziness(Fuzziness.parse(parser));
                     } else if ("prefix_length".equals(currentFieldName) || "prefixLength".equals(currentFieldName)) {
                         matchQuery.setFuzzyPrefixLength(parser.intValue());
@@ -123,10 +123,8 @@ public class MatchQueryParser implements QueryParser {
                         }
                     } else if ("minimum_should_match".equals(currentFieldName) || "minimumShouldMatch".equals(currentFieldName)) {
                         minimumShouldMatch = parser.textOrNull();
-                    } else if ("rewrite".equals(currentFieldName)) {
-                        matchQuery.setRewriteMethod(QueryParsers.parseRewriteMethod(parser.textOrNull(), null));
                     } else if ("fuzzy_rewrite".equals(currentFieldName) || "fuzzyRewrite".equals(currentFieldName)) {
-                        matchQuery.setFuzzyRewriteMethod(QueryParsers.parseRewriteMethod(parser.textOrNull(), null));
+                        matchQuery.setFuzzyRewriteMethod(QueryParsers.parseRewriteMethod(parseContext.parseFieldMatcher(), parser.textOrNull(), null));
                     } else if ("fuzzy_transpositions".equals(currentFieldName)) {
                         matchQuery.setTranspositions(parser.booleanValue());
                     } else if ("lenient".equals(currentFieldName)) {

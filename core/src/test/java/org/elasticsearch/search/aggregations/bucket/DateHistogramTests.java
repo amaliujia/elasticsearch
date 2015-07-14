@@ -1281,9 +1281,9 @@ public class DateHistogramTests extends ElasticsearchIntegrationTest {
     public void testIssue8209() throws InterruptedException, ExecutionException {
         assertAcked(client().admin().indices().prepareCreate("test8209").addMapping("type", "d", "type=date").get());
         indexRandom(true,
-                client().prepareIndex("test8209", "type").setSource("d", "2014-01-01T0:00:00Z"),
-                client().prepareIndex("test8209", "type").setSource("d", "2014-04-01T0:00:00Z"),
-                client().prepareIndex("test8209", "type").setSource("d", "2014-04-30T0:00:00Z"));
+                client().prepareIndex("test8209", "type").setSource("d", "2014-01-01T00:00:00Z"),
+                client().prepareIndex("test8209", "type").setSource("d", "2014-04-01T00:00:00Z"),
+                client().prepareIndex("test8209", "type").setSource("d", "2014-04-30T00:00:00Z"));
         ensureSearchable("test8209");
         SearchResponse response = client().prepareSearch("test8209")
                 .addAggregation(dateHistogram("histo").field("d").interval(DateHistogramInterval.MONTH).timeZone("CET")
@@ -1316,8 +1316,7 @@ public class DateHistogramTests extends ElasticsearchIntegrationTest {
         }
     }
 
-    @AwaitsFix(bugUrl="https://github.com/elastic/elasticsearch/pull/11482")
-    public void testTimestampField() {
+    public void testTimestampField() { // see #11692
         SearchResponse response = client().prepareSearch("idx").addAggregation(dateHistogram("histo").field("_timestamp").interval(randomFrom(DateHistogramInterval.DAY, DateHistogramInterval.MONTH))).get();
         assertSearchResponse(response);
         Histogram histo = response.getAggregations().get("histo");

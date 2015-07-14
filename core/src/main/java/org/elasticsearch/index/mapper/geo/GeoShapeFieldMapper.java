@@ -37,12 +37,11 @@ import org.elasticsearch.common.geo.builders.ShapeBuilder.Orientation;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.DistanceUnit;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.index.fielddata.FieldDataType;
+import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.ParseContext;
-import org.elasticsearch.index.mapper.core.AbstractFieldMapper;
 
 import java.io.IOException;
 import java.util.Iterator;
@@ -69,7 +68,7 @@ import static org.elasticsearch.index.mapper.MapperBuilders.geoShapeField;
  * ]
  * }
  */
-public class GeoShapeFieldMapper extends AbstractFieldMapper {
+public class GeoShapeFieldMapper extends FieldMapper {
 
     public static final String CONTENT_TYPE = "geo_shape";
 
@@ -107,7 +106,7 @@ public class GeoShapeFieldMapper extends AbstractFieldMapper {
         }
     }
 
-    public static class Builder extends AbstractFieldMapper.Builder<Builder, GeoShapeFieldMapper> {
+    public static class Builder extends FieldMapper.Builder<Builder, GeoShapeFieldMapper> {
 
         public Builder(String name) {
             super(name, Defaults.FIELD_TYPE);
@@ -121,17 +120,17 @@ public class GeoShapeFieldMapper extends AbstractFieldMapper {
         public GeoShapeFieldMapper build(BuilderContext context) {
             GeoShapeFieldType geoShapeFieldType = (GeoShapeFieldType)fieldType;
 
-            if (geoShapeFieldType.tree.equals("quadtree") && context.indexCreatedVersion().before(Version.V_2_0_0)) {
+            if (geoShapeFieldType.tree.equals("quadtree") && context.indexCreatedVersion().before(Version.V_2_0_0_beta1)) {
                 geoShapeFieldType.setTree("legacyquadtree");
             }
 
-            if (context.indexCreatedVersion().before(Version.V_2_0_0) ||
+            if (context.indexCreatedVersion().before(Version.V_2_0_0_beta1) ||
                 (geoShapeFieldType.treeLevels() == 0 && geoShapeFieldType.precisionInMeters() < 0)) {
                 geoShapeFieldType.setDefaultDistanceErrorPct(Defaults.LEGACY_DISTANCE_ERROR_PCT);
             }
             setupFieldType(context);
 
-            return new GeoShapeFieldMapper(fieldType, context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
+            return new GeoShapeFieldMapper(name, fieldType, context.indexSettings(), multiFieldsBuilder.build(this, context), copyTo);
         }
     }
 
@@ -183,9 +182,7 @@ public class GeoShapeFieldMapper extends AbstractFieldMapper {
         private RecursivePrefixTreeStrategy recursiveStrategy;
         private TermQueryPrefixTreeStrategy termStrategy;
 
-        public GeoShapeFieldType() {
-            super(AbstractFieldMapper.Defaults.FIELD_TYPE);
-        }
+        public GeoShapeFieldType() {}
 
         protected GeoShapeFieldType(GeoShapeFieldType ref) {
             super(ref);
@@ -199,7 +196,7 @@ public class GeoShapeFieldMapper extends AbstractFieldMapper {
         }
 
         @Override
-        public MappedFieldType clone() {
+        public GeoShapeFieldType clone() {
             return new GeoShapeFieldType(this);
         }
 
@@ -219,6 +216,11 @@ public class GeoShapeFieldMapper extends AbstractFieldMapper {
         @Override
         public int hashCode() {
             return Objects.hash(super.hashCode(), tree, strategyName, treeLevels, precisionInMeters, distanceErrorPct, defaultDistanceErrorPct, orientation);
+        }
+
+        @Override
+        public String typeName() {
+            return CONTENT_TYPE;
         }
 
         @Override
@@ -246,8 +248,8 @@ public class GeoShapeFieldMapper extends AbstractFieldMapper {
         }
         
         @Override
-        public void checkCompatibility(MappedFieldType fieldType, List<String> conflicts) {
-            super.checkCompatibility(fieldType, conflicts);
+        public void checkCompatibility(MappedFieldType fieldType, List<String> conflicts, boolean strict) {
+            super.checkCompatibility(fieldType, conflicts, strict);
             GeoShapeFieldType other = (GeoShapeFieldType)fieldType;
             // prevent user from changing strategies
             if (strategyName().equals(other.strategyName()) == false) {
@@ -355,23 +357,13 @@ public class GeoShapeFieldMapper extends AbstractFieldMapper {
 
     }
 
-    public GeoShapeFieldMapper(MappedFieldType fieldType, Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
-        super(fieldType, false, null, indexSettings, multiFields, copyTo);
+    public GeoShapeFieldMapper(String simpleName, MappedFieldType fieldType, Settings indexSettings, MultiFields multiFields, CopyTo copyTo) {
+        super(simpleName, fieldType, Defaults.FIELD_TYPE, indexSettings, multiFields, copyTo);
     }
 
     @Override
     public GeoShapeFieldType fieldType() {
         return (GeoShapeFieldType) super.fieldType();
-    }
-
-    @Override
-    public MappedFieldType defaultFieldType() {
-        return Defaults.FIELD_TYPE;
-    }
-
-    @Override
-    public FieldDataType defaultFieldDataType() {
-        return null;
     }
 
     @Override

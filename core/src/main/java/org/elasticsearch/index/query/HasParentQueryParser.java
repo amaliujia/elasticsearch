@@ -86,7 +86,7 @@ public class HasParentQueryParser implements QueryParser {
                 // type may not have been extracted yet, so use the
                 // XContentStructure.<type> facade to parse if available,
                 // or delay parsing if not.
-                if (QUERY_FIELD.match(currentFieldName)) {
+                if (parseContext.parseFieldMatcher().match(currentFieldName, QUERY_FIELD)) {
                     iq = new XContentStructure.InnerQuery(parseContext, parentType == null ? null : new String[] {parentType});
                     queryFound = true;
                 } else if ("inner_hits".equals(currentFieldName)) {
@@ -154,7 +154,8 @@ public class HasParentQueryParser implements QueryParser {
         }
 
         if (innerHits != null) {
-            InnerHitsContext.ParentChildInnerHits parentChildInnerHits = new InnerHitsContext.ParentChildInnerHits(innerHits.v2(), innerQuery, null, parseContext.mapperService(), parentDocMapper);
+            ParsedQuery parsedQuery = new ParsedQuery(innerQuery, parseContext.copyNamedQueries());
+            InnerHitsContext.ParentChildInnerHits parentChildInnerHits = new InnerHitsContext.ParentChildInnerHits(innerHits.v2(), parsedQuery, null, parseContext.mapperService(), parentDocMapper);
             String name = innerHits.v1() != null ? innerHits.v1() : parentType;
             parseContext.addInnerHits(name, parentChildInnerHits);
         }
@@ -201,7 +202,7 @@ public class HasParentQueryParser implements QueryParser {
         // wrap the query with type query
         innerQuery = Queries.filtered(innerQuery, parentDocMapper.typeFilter());
         Filter childrenFilter = new QueryWrapperFilter(Queries.not(parentFilter));
-        if (parseContext.indexVersionCreated().onOrAfter(Version.V_2_0_0)) {
+        if (parseContext.indexVersionCreated().onOrAfter(Version.V_2_0_0_beta1)) {
             ScoreType scoreMode = score ? ScoreType.MAX : ScoreType.NONE;
             return joinUtilHelper(parentType, parentChildIndexFieldData, childrenFilter, scoreMode, innerQuery, 0, Integer.MAX_VALUE);
         } else {

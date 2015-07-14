@@ -42,27 +42,16 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.Locale;
 
 import static org.elasticsearch.client.Requests.indexRequest;
 import static org.elasticsearch.client.Requests.searchRequest;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.index.query.QueryBuilders.constantScoreQuery;
-import static org.elasticsearch.index.query.QueryBuilders.functionScoreQuery;
-import static org.elasticsearch.index.query.QueryBuilders.termQuery;
-import static org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders.exponentialDecayFunction;
-import static org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders.gaussDecayFunction;
-import static org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders.linearDecayFunction;
+import static org.elasticsearch.index.query.QueryBuilders.*;
+import static org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders.*;
 import static org.elasticsearch.search.builder.SearchSourceBuilder.searchSource;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertOrderedSearchHits;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertSearchHits;
-import static org.hamcrest.Matchers.anyOf;
-import static org.hamcrest.Matchers.closeTo;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.isOneOf;
-import static org.hamcrest.Matchers.lessThan;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.*;
+import static org.hamcrest.Matchers.*;
 
 public class DecayFunctionScoreTests extends ElasticsearchIntegrationTest {
 
@@ -449,7 +438,7 @@ public class DecayFunctionScoreTests extends ElasticsearchIntegrationTest {
         assertAcked(prepareCreate("test").addMapping(
                 "type1",
                 jsonBuilder().startObject().startObject("type1").startObject("properties").startObject("test").field("type", "string")
-                        .endObject().startObject("num1").field("type", "date").endObject().endObject().endObject().endObject()));
+                        .endObject().startObject("num1").field("type", "date").field("format", "epoch_millis").endObject().endObject().endObject().endObject()));
         ensureYellow();
         client().index(
                 indexRequest("test").type("type1").id("1")
@@ -542,17 +531,17 @@ public class DecayFunctionScoreTests extends ElasticsearchIntegrationTest {
         ensureYellow();
 
         DateTime docDate = dt.minusDays(1);
-        String docDateString = docDate.getYear() + "-" + docDate.getMonthOfYear() + "-" + docDate.getDayOfMonth();
+        String docDateString = docDate.getYear() + "-" + String.format(Locale.ROOT, "%02d", docDate.getMonthOfYear()) + "-" + String.format(Locale.ROOT, "%02d", docDate.getDayOfMonth());
         client().index(
                 indexRequest("test").type("type1").id("1")
                         .source(jsonBuilder().startObject().field("test", "value").field("num1", docDateString).endObject())).actionGet();
         docDate = dt.minusDays(2);
-        docDateString = docDate.getYear() + "-" + docDate.getMonthOfYear() + "-" + docDate.getDayOfMonth();
+        docDateString = docDate.getYear() + "-" + String.format(Locale.ROOT, "%02d", docDate.getMonthOfYear()) + "-" + String.format(Locale.ROOT, "%02d", docDate.getDayOfMonth());
         client().index(
                 indexRequest("test").type("type1").id("2")
                         .source(jsonBuilder().startObject().field("test", "value").field("num1", docDateString).endObject())).actionGet();
         docDate = dt.minusDays(3);
-        docDateString = docDate.getYear() + "-" + docDate.getMonthOfYear() + "-" + docDate.getDayOfMonth();
+        docDateString = docDate.getYear() + "-" + String.format(Locale.ROOT, "%02d", docDate.getMonthOfYear()) + "-" + String.format(Locale.ROOT, "%02d", docDate.getDayOfMonth());
         client().index(
                 indexRequest("test").type("type1").id("3")
                         .source(jsonBuilder().startObject().field("test", "value").field("num1", docDateString).endObject())).actionGet();
@@ -816,7 +805,7 @@ public class DecayFunctionScoreTests extends ElasticsearchIntegrationTest {
             fail("Search should result in SearchPhaseExecutionException");
         } catch (SearchPhaseExecutionException e) {
             logger.info(e.shardFailures()[0].reason());
-            assertTrue(e.shardFailures()[0].reason().contains("Found \"functions\": [...] already, now encountering \"boost_factor\". Did you mean \"boost\" instead?"));
+            assertThat(e.shardFailures()[0].reason(), containsString("already found [functions] array, now encountering [boost_factor]. did you mean [boost] instead?"));
         }
 
         query = XContentFactory.jsonBuilder();
@@ -829,7 +818,7 @@ public class DecayFunctionScoreTests extends ElasticsearchIntegrationTest {
             fail("Search should result in SearchPhaseExecutionException");
         } catch (SearchPhaseExecutionException e) {
             logger.info(e.shardFailures()[0].reason());
-            assertTrue(e.shardFailures()[0].reason().contains("Found \"boost_factor\" already, now encountering \"functions\": [...]. Did you mean \"boost\" instead?"));
+            assertThat(e.shardFailures()[0].reason(), containsString("already found [boost_factor], now encountering [functions]. did you mean [boost] instead?"));
         }
 
         query = XContentFactory.jsonBuilder();
@@ -842,8 +831,8 @@ public class DecayFunctionScoreTests extends ElasticsearchIntegrationTest {
             fail("Search should result in SearchPhaseExecutionException");
         } catch (SearchPhaseExecutionException e) {
             logger.info(e.shardFailures()[0].reason());
-            assertTrue(e.shardFailures()[0].reason().contains("Found \"random_score\" already, now encountering \"functions\": [...]."));
-            assertFalse(e.shardFailures()[0].reason().contains("Did you mean \"boost\" instead?"));
+            assertThat(e.shardFailures()[0].reason(), containsString("already found [random_score], now encountering [functions]"));
+            assertThat(e.shardFailures()[0].reason(), not(containsString("did you mean [boost] instead?")));
 
         }
     }
@@ -882,8 +871,8 @@ public class DecayFunctionScoreTests extends ElasticsearchIntegrationTest {
                             searchSource().query(query))).actionGet();
             fail("Should fail with SearchPhaseExecutionException");
         } catch (SearchPhaseExecutionException failure) {
-            assertTrue(failure.toString().contains("SearchParseException"));
-            assertFalse(failure.toString().contains("NullPointerException"));
+            assertThat(failure.toString(), containsString("SearchParseException"));
+            assertThat(failure.toString(), not(containsString("NullPointerException")));
         }
 
         query = "{\n" +
@@ -916,26 +905,26 @@ public class DecayFunctionScoreTests extends ElasticsearchIntegrationTest {
                             searchSource().query(query))).actionGet();
             fail("Should fail with SearchPhaseExecutionException");
         } catch (SearchPhaseExecutionException failure) {
-            assertTrue(failure.toString().contains("SearchParseException"));
-            assertFalse(failure.toString().contains("NullPointerException"));
-            assertTrue(failure.toString().contains("One entry in functions list is missing a function"));
+            assertThat(failure.toString(), containsString("SearchParseException"));
+            assertThat(failure.toString(), not(containsString("NullPointerException")));
+            assertThat(failure.toString(), containsString("an entry in functions list is missing a function"));
         }
 
         // next test java client
         try {
             client().prepareSearch("t").setQuery(QueryBuilders.functionScoreQuery(QueryBuilders.matchAllQuery(), null)).get();
         } catch (IllegalArgumentException failure) {
-            assertTrue(failure.toString().contains("function must not be null"));
+            assertThat(failure.toString(), containsString("function must not be null"));
         }
         try {
             client().prepareSearch("t").setQuery(QueryBuilders.functionScoreQuery().add(QueryBuilders.matchAllQuery(), null)).get();
         } catch (IllegalArgumentException failure) {
-            assertTrue(failure.toString().contains("function must not be null"));
+            assertThat(failure.toString(), containsString("function must not be null"));
         }
         try {
             client().prepareSearch("t").setQuery(QueryBuilders.functionScoreQuery().add(null)).get();
         } catch (IllegalArgumentException failure) {
-            assertTrue(failure.toString().contains("function must not be null"));
+            assertThat(failure.toString(), containsString("function must not be null"));
         }
     }
 

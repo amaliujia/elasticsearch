@@ -19,6 +19,7 @@
 
 package org.elasticsearch.bootstrap;
 
+import org.apache.lucene.util.Constants;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.test.ElasticsearchTestCase;
@@ -178,5 +179,56 @@ public class SecurityTests extends ElasticsearchTestCase {
             Security.ensureDirectoryExists(brokenLink);
             fail("didn't get expected exception");
         } catch (IOException expected) {}
+    }
+
+    /** We only grant this to special jars */
+    public void testUnsafeAccess() throws Exception {
+        assumeTrue("test requires security manager", System.getSecurityManager() != null);
+        try {
+            // class could be legitimately loaded, so we might not fail until setAccessible
+            Class.forName("sun.misc.Unsafe")
+                 .getDeclaredField("theUnsafe")
+                 .setAccessible(true);
+            fail("didn't get expected exception");
+        } catch (SecurityException expected) {
+            // ok
+        } catch (Exception somethingElse) {
+            assumeNoException("perhaps JVM doesn't have Unsafe?", somethingElse);
+        }
+    }
+
+    /** can't execute processes */
+    public void testProcessExecution() throws Exception {
+        assumeTrue("test requires security manager", System.getSecurityManager() != null);
+        try {
+            Runtime.getRuntime().exec("ls");
+            fail("didn't get expected exception");
+        } catch (SecurityException expected) {}
+    }
+
+    /** When a configured dir is a symlink, test that permissions work on link target */
+    public void testSymlinkPermissions() throws IOException {
+        // see https://github.com/elastic/elasticsearch/issues/12170
+        assumeFalse("windows does not automatically grant permission to the target of symlinks", Constants.WINDOWS);
+        Path dir = createTempDir();
+
+        Path target = dir.resolve("target");
+        Files.createDirectory(target);
+
+        // symlink
+        Path link = dir.resolve("link");
+        try {
+            Files.createSymbolicLink(link, target);
+        } catch (UnsupportedOperationException | IOException e) {
+            assumeNoException("test requires filesystem that supports symbolic links", e);
+        } catch (SecurityException e) {
+            assumeNoException("test cannot create symbolic links with security manager enabled", e);
+        }
+        Permissions permissions = new Permissions();
+        Security.addPath(permissions, link, "read");
+        assertTrue(permissions.implies(new FilePermission(link.toString(), "read")));
+        assertTrue(permissions.implies(new FilePermission(link.resolve("foo").toString(), "read")));
+        assertTrue(permissions.implies(new FilePermission(target.toString(), "read")));
+        assertTrue(permissions.implies(new FilePermission(target.resolve("foo").toString(), "read")));
     }
 }

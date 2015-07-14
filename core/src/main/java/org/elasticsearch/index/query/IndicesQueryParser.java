@@ -22,6 +22,7 @@ package org.elasticsearch.index.query;
 import org.apache.lucene.search.Query;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.cluster.ClusterService;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.inject.Inject;
@@ -44,10 +45,12 @@ public class IndicesQueryParser implements QueryParser {
 
     @Nullable
     private final ClusterService clusterService;
+    private final IndexNameExpressionResolver indexNameExpressionResolver;
 
     @Inject
-    public IndicesQueryParser(@Nullable ClusterService clusterService) {
+    public IndicesQueryParser(@Nullable ClusterService clusterService, IndexNameExpressionResolver indexNameExpressionResolver) {
         this.clusterService = clusterService;
+        this.indexNameExpressionResolver = indexNameExpressionResolver;
     }
 
     @Override
@@ -73,10 +76,10 @@ public class IndicesQueryParser implements QueryParser {
             if (token == XContentParser.Token.FIELD_NAME) {
                 currentFieldName = parser.currentName();
             } else if (token == XContentParser.Token.START_OBJECT) {
-                if (QUERY_FIELD.match(currentFieldName)) {
+                if (parseContext.parseFieldMatcher().match(currentFieldName, QUERY_FIELD)) {
                     innerQuery = new XContentStructure.InnerQuery(parseContext, null);
                     queryFound = true;
-                } else if (NO_MATCH_QUERY.match(currentFieldName)) {
+                } else if (parseContext.parseFieldMatcher().match(currentFieldName, NO_MATCH_QUERY)) {
                     innerNoMatchQuery = new XContentStructure.InnerQuery(parseContext, null);
                 } else {
                     throw new QueryParsingException(parseContext, "[indices] query does not support [" + currentFieldName + "]");
@@ -106,7 +109,7 @@ public class IndicesQueryParser implements QueryParser {
                     }
                     indicesFound = true;
                     currentIndexMatchesIndices = matchesIndices(parseContext.index().name(), parser.text());
-                } else if (NO_MATCH_QUERY.match(currentFieldName)) {
+                } else if (parseContext.parseFieldMatcher().match(currentFieldName, NO_MATCH_QUERY)) {
                     String type = parser.text();
                     if ("all".equals(type)) {
                         noMatchQuery = Queries.newMatchAllQuery();
@@ -150,7 +153,7 @@ public class IndicesQueryParser implements QueryParser {
     }
 
     protected boolean matchesIndices(String currentIndex, String... indices) {
-        final String[] concreteIndices = clusterService.state().metaData().concreteIndices(IndicesOptions.lenientExpandOpen(), indices);
+        final String[] concreteIndices = indexNameExpressionResolver.concreteIndices(clusterService.state(), IndicesOptions.lenientExpandOpen(), indices);
         for (String index : concreteIndices) {
             if (Regex.simpleMatch(index, currentIndex)) {
                 return true;

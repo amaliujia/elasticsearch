@@ -19,12 +19,10 @@
 
 package org.elasticsearch.search.aggregations.pipeline.movavg.models;
 
-import com.google.common.collect.EvictingQueue;
-
 import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.search.SearchParseException;
-import org.elasticsearch.search.internal.SearchContext;
 
 import java.io.IOException;
 import java.text.ParseException;
@@ -35,16 +33,41 @@ import java.util.Map;
 public abstract class MovAvgModel {
 
     /**
+     * Should this model be fit to the data via a cost minimizing algorithm by default?
+     *
+     * @return
+     */
+    public boolean minimizeByDefault() {
+        return false;
+    }
+
+    /**
+     * Returns if the model can be cost minimized.  Not all models have parameters
+     * which can be tuned / optimized.
+     *
+     * @return
+     */
+    public abstract boolean canBeMinimized();
+
+    /**
+     * Generates a "neighboring" model, where one of the tunable parameters has been
+     * randomly mutated within the allowed range.  Used for minimization
+     *
+     * @return
+     */
+    public abstract MovAvgModel neighboringModel();
+
+    /**
      * Checks to see this model can produce a new value, without actually running the algo.
      * This can be used for models that have certain preconditions that need to be met in order
      * to short-circuit execution
      *
-     * @param windowLength  Length of current window
-     * @return              Returns `true` if calling next() will produce a value, `false` otherwise
+     * @param valuesAvailable Number of values in the current window of values
+     * @return                Returns `true` if calling next() will produce a value, `false` otherwise
      */
-    public boolean hasValue(int windowLength) {
+    public boolean hasValue(int valuesAvailable) {
         // Default implementation can always provide a next() value
-        return true;
+        return valuesAvailable > 0;
     }
 
     /**
@@ -57,9 +80,7 @@ public abstract class MovAvgModel {
     public abstract <T extends Number> double next(Collection<T> values);
 
     /**
-     * Predicts the next `n` values in the series, using the smoothing model to generate new values.
-     * Default prediction mode is to simply continuing calling <code>next()</code> and adding the
-     * predicted value back into the windowed buffer.
+     * Predicts the next `n` values in the series.
      *
      * @param values            Collection of numerics to movingAvg, usually windowed
      * @param numPredictions    Number of newly generated predictions to return
@@ -67,34 +88,31 @@ public abstract class MovAvgModel {
      * @return                  Returns an array of doubles, since most smoothing methods operate on floating points
      */
     public <T extends Number> double[] predict(Collection<T> values, int numPredictions) {
-        double[] predictions = new double[numPredictions];
+        assert(numPredictions >= 1);
 
         // If there are no values, we can't do anything.  Return an array of NaNs.
-        if (values.size() == 0) {
+        if (values.isEmpty()) {
             return emptyPredictions(numPredictions);
         }
 
-        // special case for one prediction, avoids allocation
-        if (numPredictions < 1) {
-            throw new IllegalArgumentException("numPredictions may not be less than 1.");
-        } else if (numPredictions == 1){
-            predictions[0] = next(values);
-            return predictions;
-        }
-
-        Collection<Number> predictionBuffer = EvictingQueue.create(values.size());
-        predictionBuffer.addAll(values);
-
-        for (int i = 0; i < numPredictions; i++) {
-            predictions[i] = next(predictionBuffer);
-
-            // Add the last value to the buffer, so we can keep predicting
-            predictionBuffer.add(predictions[i]);
-        }
-
-        return predictions;
+        return doPredict(values, numPredictions);
     }
 
+    /**
+     * Calls to the model-specific implementation which actually generates the predictions
+     *
+     * @param values            Collection of numerics to movingAvg, usually windowed
+     * @param numPredictions    Number of newly generated predictions to return
+     * @param <T>               Type of numeric
+     * @return                  Returns an array of doubles, since most smoothing methods operate on floating points
+     */
+    protected abstract <T extends Number> double[] doPredict(Collection<T> values, int numPredictions);
+
+    /**
+     * Returns an empty set of predictions, filled with NaNs
+     * @param numPredictions Number of empty predictions to generate
+     * @return
+     */
     protected double[] emptyPredictions(int numPredictions) {
         double[] predictions = new double[numPredictions];
         Arrays.fill(predictions, Double.NaN);
@@ -108,6 +126,13 @@ public abstract class MovAvgModel {
      * @throws IOException
      */
     public abstract void writeTo(StreamOutput out) throws IOException;
+
+    /**
+     * Clone the model, returning an exact copy
+     *
+     * @return
+     */
+    public abstract MovAvgModel clone();
 
     /**
      * Abstract class which also provides some concrete parsing functionality.
@@ -124,12 +149,13 @@ public abstract class MovAvgModel {
         /**
          * Parse a settings hash that is specific to this model
          *
-         * @param settings      Map of settings, extracted from the request
-         * @param pipelineName   Name of the parent pipeline agg
-         * @param windowSize    Size of the window for this moving avg
-         * @return              A fully built moving average model
+         * @param settings           Map of settings, extracted from the request
+         * @param pipelineName       Name of the parent pipeline agg
+         * @param windowSize         Size of the window for this moving avg
+         * @param parseFieldMatcher  Matcher for field names
+         * @return                   A fully built moving average model
          */
-        public abstract MovAvgModel parse(@Nullable Map<String, Object> settings, String pipelineName, int windowSize) throws ParseException;
+        public abstract MovAvgModel parse(@Nullable Map<String, Object> settings, String pipelineName, int windowSize, ParseFieldMatcher parseFieldMatcher) throws ParseException;
 
 
         /**

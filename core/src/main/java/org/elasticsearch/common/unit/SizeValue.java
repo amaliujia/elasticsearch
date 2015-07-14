@@ -27,12 +27,11 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Streamable;
 
 import java.io.IOException;
-import java.io.Serializable;
 
 /**
  *
  */
-public class SizeValue implements Serializable, Streamable {
+public class SizeValue implements Streamable {
 
     private long size;
 
@@ -191,7 +190,7 @@ public class SizeValue implements Serializable, Streamable {
                 singles = Long.parseLong(sValue);
             }
         } catch (NumberFormatException e) {
-            throw new ElasticsearchParseException("Failed to parse [" + sValue + "]", e);
+            throw new ElasticsearchParseException("failed to parse [{}]", e, sValue);
         }
         return new SizeValue(singles, SizeUnit.SINGLE);
     }
